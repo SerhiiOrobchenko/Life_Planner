@@ -1,0 +1,12 @@
+{
+  "appId": "com.serhii.moyden",
+  "appName": "Мой день",
+  "webDir": "www",
+  "server": {
+    "url": "https://serhiiorobchenko.github.io/Life_Planner/",
+    "cleartext": false,
+    "errorPath": "index.html"
+  },
+  "android": { "backgroundColor": "#F4F5F9" },
+  "plugins": { "LocalNotifications": { "smallIcon": "ic_stat_notify", "iconColor": "#3D7BE0" } }
+}
