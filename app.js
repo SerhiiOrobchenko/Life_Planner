@@ -798,7 +798,7 @@ function manageThemes(after) {
 const BOOK_ST = { reading: ['Читаю', 'ti-book-2'], want: ['Хочу прочитать', 'ti-bookmark'], done: ['Прочитано', 'ti-circle-check'], paused: ['Отложено', 'ti-player-pause'] };
 let bookTab = 'reading', curBook = null, ownFilter = 'all', bookQ = '', bookCatF = 'all', bookSort = 'title';
 const booksList = () => live(S.books);
-const bPages = b => b.pages || Math.max(0, ...(b.works || []).map(w => +w.to || 0));
+const bPages = b => Math.max(+b.pages || 0, ...(b.works || []).map(w => +w.to || 0));
 const wPct = (b, w) => { const r = b.read || 0; if (w.done) return 100; if (!w.from || !w.to) return 0; if (r >= w.to) return 100; if (r < w.from) return 0; return Math.round((r - w.from + 1) / (w.to - w.from + 1) * 100); };
 const curWork = b => (b.works || []).find(w => w.from && w.to && (b.read || 0) >= w.from && (b.read || 0) <= w.to);
 const bPct = b => bPages(b) ? Math.min(100, Math.round((b.read || 0) / bPages(b) * 100)) : (b.status === 'done' ? 100 : 0);
@@ -879,7 +879,7 @@ function renderBooks() {
   const doneYear = all.filter(([, b]) => b.status === 'done' && (b.finished || '').startsWith(year)).length;
   const counts = Object.fromEntries(Object.keys(BOOK_ST).map(k => [k, all.filter(([, b]) => b.status === k).length]));
   const q = bookQ.trim().toLowerCase();
-  const hay = b => [b.title, b.author, b.note, b.publisher, b.series, b.volume, ...(b.works || []).map(w => w.t)].join(' ').toLowerCase();
+  const hay = b => [b.title, b.author, b.note, b.publisher, b.series, b.volume, b.translator, ...(b.works || []).map(w => [w.t, w.author, w.translator].join(' '))].join(' ').toLowerCase();
   const shelf = all.filter(([, b]) => q ? hay(b).includes(q) : b.status === bookTab && (bookTab !== 'want' || ownFilter === 'all' || (ownFilter === 'home') === !!b.owned));
   const catCounts = {}; shelf.forEach(([, b]) => { catCounts[b.cat] = (catCounts[b.cat] || 0) + 1; });
   if (bookCatF !== 'all' && !catCounts[bookCatF]) bookCatF = 'all';
@@ -912,7 +912,7 @@ function renderBooks() {
       <div class="grow">
         <div style="font-weight:800;font-size:16px;line-height:1.25">${esc(b.title)}</div>
         ${q ? `<span class="tag" style="background:var(--accent-soft);color:var(--accent);margin:3px 0">${BOOK_ST[b.status][0]}</span>` : ''}
-        ${(b.works || []).length ? `<div class="mute" style="font-size:12px"><i class="ti ti-stack-2"></i> ${b.works.length} произв.: ${esc(b.works.map(w => w.t).join(', '))}</div>` : ''}
+        ${(b.works || []).length ? `<div class="mute" style="font-size:12px"><i class="ti ti-stack-2"></i> ${b.works.length} произв.: ${esc(b.works.map(w => w.t + (w.author && w.author !== b.author ? ` (${w.author})` : '')).join(', '))}</div>` : ''}
         <div class="mute">${esc(b.author || '')}${b.author ? ' · ' : ''}<span style="color:${bc.c};font-weight:600">${bc.n}</span>
           ${b.owned ? ' · <i class="ti ti-home"></i> дома' : b.status === 'want' ? ' · <i class="ti ti-shopping-cart"></i> купить' : ''}</div>
         ${b.status === 'want' && b.note ? `<div class="mute" style="margin-top:4px;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(b.note)}</div>` : ''}
@@ -957,7 +957,8 @@ function renderBook() {
       ${b.started ? `<div class="mute" style="margin-top:6px;font-size:12px">Начал ${parseKey(b.started).toLocaleDateString('ru-RU')}${b.finished ? ' · закончил ' + parseKey(b.finished).toLocaleDateString('ru-RU') : ''}</div>` : ''}</div>
     <button class="iconbtn" id="bkEdit" style="box-shadow:none;background:var(--card2)"><i class="ti ti-pencil"></i></button>
   </div>
-  <div class="card" style="padding:14px"><div class="row"><i class="ti ti-note" style="color:var(--accent)"></i><b class="grow">Примечание</b><span class="mute" style="font-size:12px">почему хочу прочитать</span></div>
+  ${!(b.note || '').trim() && (b.works || []).length ? `<button class="link" id="bkNoteShow" style="margin:-4px 0 10px"><i class="ti ti-plus"></i> Примечание ко всей книге</button>` : ''}
+  <div class="card ${!(b.note || '').trim() && (b.works || []).length ? 'hidden' : ''}" id="bkNoteCard" style="padding:14px"><div class="row"><i class="ti ti-note" style="color:var(--accent)"></i><b class="grow">Примечание</b><span class="mute" style="font-size:12px">почему хочу прочитать</span></div>
     <textarea id="bkNoteMain" style="margin-top:8px;min-height:64px" placeholder="Кто посоветовал, чем зацепила, издательство, перевод…">${esc(b.note || '')}</textarea>
     ${(b.note || '').match(/https?:\/\/\S+/g) ? `<div style="margin-top:6px">${(b.note.match(/https?:\/\/\S+/g)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;font-size:13px"><i class="ti ti-external-link"></i> открыть ссылку</a>`).join(' ')}</div>` : ''}
   </div>
@@ -970,6 +971,7 @@ function renderBook() {
       return `<div class="row" style="padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer" data-wo="${w.id}">
         <button class="chk ${wp >= 100 ? 'on' : ''}" data-wk="${w.id}" style="width:26px;height:26px;font-size:13px"><i class="ti ti-check"></i></button>
         <div class="grow"><div style="font-weight:700;${wp >= 100 ? 'color:var(--mute)' : ''}">${esc(w.t)}${isCur ? ' <span class="tag" style="background:var(--accent-soft);color:var(--accent)">читаю</span>' : ''}</div>
+          ${w.author || w.translator ? `<div class="mute" style="font-size:12px">${esc(w.author || '')}${w.author && w.translator ? ' · ' : ''}${w.translator ? 'пер. ' + esc(w.translator) : ''}</div>` : ''}
           <div class="row" style="gap:8px;margin-top:3px"><span class="mute" style="font-size:12px;white-space:nowrap">${w.from && w.to ? `с. ${w.from}–${w.to}` : 'страницы не указаны'}</span>
           ${w.from && w.to ? `<div class="pbar grow" style="margin:0;height:5px"><div style="width:${wp}%;background:${bc.c}"></div></div><span class="mute" style="font-size:12px;font-weight:700">${wp}%</span>` : ''}
           ${(w.notes || []).length || w.review ? `<span class="mute" style="font-size:12px"><i class="ti ti-notes"></i> ${(w.notes || []).length + (w.review ? 1 : 0)}</span>` : ''}</div></div>
@@ -1000,6 +1002,7 @@ function renderBook() {
   $('#bkBack').onclick = () => go('books');
   $('#bkEdit').onclick = () => editBook(id);
   $('#bkCover').onclick = () => pickCover(id);
+  $('#bkNoteShow') && ($('#bkNoteShow').onclick = () => { $('#bkNoteCard').classList.remove('hidden'); $('#bkNoteShow').remove(); $('#bkNoteMain').focus(); });
   let nt2; $('#bkNoteMain').oninput = e => { clearTimeout(nt2); nt2 = setTimeout(() => updBook(id, bb => { bb.note = e.target.value; }), 700); };
   $$('[data-wo]').forEach(x => x.onclick = () => { curWorkId = x.dataset.wo; VIEW = 'work'; render(); window.scrollTo(0, 0); });
   $('#wkAdd').onclick = () => editWork(id, null);
@@ -1021,8 +1024,8 @@ function renderBook() {
 }
 let curWorkId = null;
 function edInfo(b) {
-  const parts = [['Издательство', b.publisher], ['Город', b.city], ['Год', b.year], ['Серия', [b.series, b.seriesNo ? 'том ' + b.seriesNo : ''].filter(Boolean).join(', ')],
-    ['Том собрания', b.volume], ['Перевод', b.translator], ['ISBN', b.isbn]].filter(([, v]) => v);
+  const parts = [['Издательство', b.publisher], ['Город', b.city], ['Год издания', b.year], ['Серия', [b.series, b.seriesNo ? 'том ' + b.seriesNo : ''].filter(Boolean).join(', ')],
+    ['Том собрания', b.volume], ['Перевод', b.translator], ['Редактор', b.editor], ['ISBN', b.isbn]].filter(([, v]) => v);
   return parts.map(([k, v]) => `<span class="mute">${k}:</span> ${esc(v)}`).join('<br>');
 }
 function editWork(bid, wid) {
@@ -1030,6 +1033,8 @@ function editWork(bid, wid) {
   const lastTo = Math.max(0, ...(b.works || []).map(x => +x.to || 0));
   openSheet(`<h3>${wid ? 'Произведение' : 'Новое произведение'}</h3><div class="mute">${esc(b.title)}</div>
     <label class="l">Название</label><input id="wt" value="${esc(w.t)}" placeholder="Например: Федон">
+    <label class="l">Автор</label><input id="wau" value="${esc(w.author || '')}" placeholder="${esc(b.author || 'Если отличается от автора книги')}">
+    <label class="l">Переводчик</label><input id="wtr" value="${esc(w.translator || '')}" placeholder="Необязательно">
     <div class="row"><div class="grow"><label class="l">С какой страницы</label><input id="wf" type="number" inputmode="numeric" value="${w.from || (wid ? '' : (lastTo ? lastTo + 1 : ''))}"></div>
     <div class="grow"><label class="l">По какую</label><input id="wtto" type="number" inputmode="numeric" value="${w.to || ''}"></div></div>
     <div class="row" style="margin-top:16px">${wid ? '<button class="btn2 danger" id="wdel"><i class="ti ti-trash"></i> Удалить</button>' : ''}<span class="grow"></span>
@@ -1039,9 +1044,10 @@ function editWork(bid, wid) {
     $('#wok').onclick = () => {
       const t = $('#wt').value.trim(); if (!t) return toast('Введите название');
       const from = +$('#wf').value || 0, to = +$('#wtto').value || 0; if (from && to && to < from) return toast('Конечная страница меньше начальной');
+      const author = $('#wau').value.trim(), translator = $('#wtr').value.trim();
       updBook(bid, bb => { bb.works = bb.works || [];
-        if (wid) bb.works = bb.works.map(x => x.id === wid ? { ...x, t, from, to } : x);
-        else bb.works.push({ id: uid(), t, from, to, done: false, notes: [] });
+        if (wid) bb.works = bb.works.map(x => x.id === wid ? { ...x, t, from, to, author, translator } : x);
+        else bb.works.push({ id: uid(), t, from, to, author, translator, done: false, notes: [] });
         bb.works.sort((a, c) => (a.from || 1e9) - (c.from || 1e9)); });
       closeSheet(); render();
     };
@@ -1057,12 +1063,16 @@ function renderWork() {
   <button class="link" id="woBack" style="margin:0 0 10px -4px"><i class="ti ti-arrow-left"></i> ${esc(b.title)}</button>
   <div class="card"><div class="row"><div class="ring" style="width:64px;height:64px">${ringSvg(wp / 100, bc.c, 64, 7)}<b>${wp}%</b></div>
     <div class="grow"><div style="font-weight:800;font-size:18px">${esc(w.t)}</div>
+      ${w.author || b.author ? `<div style="font-size:14px;color:var(--ink2);font-weight:600">${esc(w.author || b.author)}</div>` : ''}
+      ${w.translator ? `<div class="mute">Перевод: ${esc(w.translator)}</div>` : ''}
       <div class="mute">${len ? `страницы ${w.from}–${w.to} · ${len} стр.` : 'страницы не указаны'}</div>
       ${len ? `<div class="mute">прочитано ${readIn} из ${len} стр.</div>` : ''}</div>
     <button class="iconbtn" id="woEdit" style="box-shadow:none;background:var(--card2)"><i class="ti ti-pencil"></i></button></div>
     ${len ? `<label class="l">На какой я странице тома</label><div class="row"><input type="number" inputmode="numeric" id="woPage" value="${b.read || 0}"><button class="btn" id="woSave">OK</button></div>` : ''}
     <button class="btn2 ${wp >= 100 ? 'acc' : ''}" id="woDone" style="margin-top:10px"><i class="ti ti-circle-check"></i> ${wp >= 100 ? 'Прочитано' : 'Отметить прочитанным'}</button>
   </div>
+  <div class="card" style="padding:14px"><div class="row"><i class="ti ti-note" style="color:var(--accent)"></i><b class="grow">Примечание</b><span class="mute" style="font-size:12px">почему хочу прочитать</span></div>
+    <textarea id="woNoteMain" style="margin-top:8px;min-height:60px" placeholder="Кто посоветовал, чем интересно…">${esc(w.note || '')}</textarea></div>
   <div class="card"><b>Оценка</b><div style="font-size:28px;letter-spacing:4px;margin-top:2px">${[1, 2, 3, 4, 5].map(n => `<span data-wr="${n}" style="cursor:pointer;color:${n <= (w.rating || 0) ? 'var(--warn)' : 'var(--line)'}">★</span>`).join('')}</div>
     <label class="l">Отзыв о произведении</label><textarea id="woReview" placeholder="О чём это, что взял для себя…">${esc(w.review || '')}</textarea></div>
   <div class="sec"><h2>Заметки</h2><span class="mute">${(w.notes || []).length}</span></div>
@@ -1077,6 +1087,7 @@ function renderWork() {
   $('#woDone').onclick = () => { upW((x, bb) => { x.done = !(wPct(bb, x) >= 100); if (bb.status === 'want') { bb.status = 'reading'; bb.started = bb.started || dkey(new Date()); } }); render(); };
   $$('[data-wr]').forEach(x => x.onclick = () => { upW(y => { y.rating = +x.dataset.wr; }); render(); });
   $('#woReview').onchange = e => upW(y => { y.review = e.target.value; });
+  let wnt; $('#woNoteMain').oninput = e => { clearTimeout(wnt); wnt = setTimeout(() => upW(y => { y.note = e.target.value; }), 700); };
   $('#woMic').onclick = () => toggleDictation($('#woNote'), $('#woMic'), $('#woMicSt'));
   $('#woAdd').onclick = () => { const t = $('#woNote').value.trim(); if (!t) return toast('Напишите или надиктуйте заметку');
     stopDictation(); upW((y, bb) => { y.notes = [...(y.notes || []), { id: uid(), d: dkey(new Date()), page: bb.read || 0, t }]; }); render(); toast('Заметка сохранена'); };
@@ -1092,14 +1103,15 @@ function editBook(id) {
     <label class="l">Страниц в книге</label><input id="kp" type="number" inputmode="numeric" value="${b.pages || ''}" placeholder="Например: 320">
     <label class="l">Тема</label><div class="chips" id="kc">${Object.entries(BOOK_CATS).map(([k, v]) => `<button type="button" class="chip ${k === b.cat ? 'on' : ''}" data-kc="${k}" style="border-color:${k === b.cat ? v.c : 'transparent'}"><span style="width:10px;height:10px;border-radius:50%;background:${v.c}"></span>${v.n}</button>`).join('')}</div>
     <button type="button" class="link" id="kthm" style="margin-top:6px"><i class="ti ti-settings"></i> Изменить темы, цвета, добавить новую</button>
-    <details style="margin-top:12px" ${['publisher', 'city', 'year', 'series', 'seriesNo', 'volume', 'translator', 'isbn'].some(k => b[k]) ? 'open' : ''}><summary style="font-weight:700;cursor:pointer;padding:6px 0">Об издании (необязательно)</summary>
+    <details style="margin-top:12px" ${['publisher', 'city', 'year', 'series', 'seriesNo', 'volume', 'translator', 'editor', 'isbn'].some(k => b[k]) ? 'open' : ''}><summary style="font-weight:700;cursor:pointer;padding:6px 0">Об издании (необязательно)</summary>
       <div class="row"><div class="grow"><label class="l">Издательство</label><input id="kpub" value="${esc(b.publisher || '')}" placeholder="Мысль"></div>
-        <div style="width:90px"><label class="l">Год</label><input id="kyear" inputmode="numeric" value="${esc(b.year || '')}" placeholder="1994"></div></div>
+        <div style="width:90px"><label class="l">Год изд.</label><input id="kyear" inputmode="numeric" value="${esc(b.year || '')}" placeholder="1994"></div></div>
       <label class="l">Город</label><input id="kcity" value="${esc(b.city || '')}" placeholder="Москва">
       <div class="row"><div class="grow"><label class="l">Серия</label><input id="kser" value="${esc(b.series || '')}" placeholder="Философское наследие"></div>
         <div style="width:90px"><label class="l">№ в серии</label><input id="kserno" value="${esc(b.seriesNo || '')}" placeholder="117"></div></div>
       <label class="l">Том собрания сочинений</label><input id="kvol" value="${esc(b.volume || '')}" placeholder="Том 3 из 4">
-      <label class="l">Переводчик</label><input id="ktr" value="${esc(b.translator || '')}">
+      <div class="row"><div class="grow"><label class="l">Переводчик</label><input id="ktr" value="${esc(b.translator || '')}"></div>
+        <div class="grow"><label class="l">Редактор</label><input id="ked" value="${esc(b.editor || '')}"></div></div>
       <label class="l">ISBN</label><input id="kisbn" value="${esc(b.isbn || '')}">
     </details>
     ${id ? '' : `<label class="l">Статус</label><div class="days" id="ks">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button type="button" data-ks="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:12px;padding:8px 4px">${n}</button>`).join('')}</div>`}
@@ -1116,7 +1128,7 @@ function editBook(id) {
       S.books[nid] = { ...(id ? S.books[id] : { read: 0, notes: [], log: [], added: dkey(new Date()) }), u: now(), title: $('#kt').value.trim(), author: $('#ka').value.trim(),
         pages: +$('#kp').value || 0, owned: $('#kown').checked, note: $('#kn').value.trim(),
         publisher: $('#kpub').value.trim(), year: $('#kyear').value.trim(), city: $('#kcity').value.trim(), series: $('#kser').value.trim(), seriesNo: $('#kserno').value.trim(),
-        volume: $('#kvol').value.trim(), translator: $('#ktr').value.trim(), isbn: $('#kisbn').value.trim(), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
+        volume: $('#kvol').value.trim(), translator: $('#ktr').value.trim(), editor: $('#ked').value.trim(), isbn: $('#kisbn').value.trim(), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
         ...(id ? {} : st === 'reading' ? { started: dkey(new Date()) } : st === 'done' ? { finished: dkey(new Date()) } : {}) };
       persist(); closeSheet(); if (!id) bookTab = st; if (VIEW === 'book' || VIEW === 'books') render(); else openBook(nid);
     };
