@@ -231,16 +231,16 @@ const catOptions = sel => Object.entries(CATS).map(([k, v]) => `<option value="$
 
 /* ---------- router ---------- */
 let VIEW = 'today', viewDate = new Date(), weekOffset = 0, tplTab = 'weekday';
-const TITLES = { today: 'Сегодня', time: 'Учёт времени', goals: 'Цели', week: 'Неделя', settings: 'Настройки' };
+const TITLES = { today: 'Сегодня', time: 'Учёт времени', goals: 'Цели', week: 'Неделя', settings: 'Настройки', diary: 'Дневник' };
 $('#nav').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  VIEW = b.dataset.v; if (VIEW === 'today') viewDate = new Date();
+  stopDictation(); VIEW = b.dataset.v; if (VIEW === 'today') viewDate = new Date();
   document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
   render(); window.scrollTo(0, 0);
 });
 function render() {
   $('#title').textContent = TITLES[VIEW];
-  ({ today: renderToday, time: renderTime, goals: renderGoals, week: renderWeek, settings: renderSettings })[VIEW]();
+  ({ today: renderToday, time: renderTime, goals: renderGoals, week: renderWeek, settings: renderSettings, diary: renderDiary })[VIEW]();
 }
 
 /* ---------- TODAY ---------- */
@@ -256,6 +256,7 @@ function streak(hid) {
   return n;
 }
 function renderToday() {
+  if (recOn) stopDictation();
   const k = dkey(viewDate), isToday = k === dkey(new Date());
   const dd = day(k), blocks = [...templateFor(viewDate).blocks].sort((a, b) => {
     const fa = toMin(a.start) < 300 ? toMin(a.start) + 1440 : toMin(a.start);
@@ -272,7 +273,7 @@ function renderToday() {
   $('#view').innerHTML = `
   <div class="row" style="margin-bottom:10px">
     <button class="ghost small" id="prevD">◀</button>
-    <div class="grow" style="text-align:center;font-weight:600;text-transform:capitalize">${esc(dateStr)}${isToday ? '' : ' <button class="ghost small" id="toToday">сегодня</button>'}</div>
+    <div class="grow" style="text-align:center;font-weight:600">${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}${isToday ? '' : ' <button class="ghost small" id="toToday">сегодня</button>'}</div>
     <button class="ghost small" id="nextD">▶</button>
   </div>
   ${cur ? `<div class="card" style="border-color:${CATS[cur.cat]?.c}">
@@ -301,8 +302,11 @@ function renderToday() {
       return `<div class="habit ${dd.habits?.[id] ? 'on' : ''}" data-hab="${id}">${dd.habits?.[id] ? '✅' : '⬜'} <span>${esc(h.name)}</span>${st > 1 ? `<span class="streak">🔥${st}</span>` : ''}</div>`; }).join('')}</div>
   </div>
   <div class="card">
-    <h2>Заметка дня</h2>
-    <textarea id="dayNote" placeholder="Что получилось, что мешало, за что благодарен…">${esc(dd.note || '')}</textarea>
+    <div class="row" style="margin-bottom:8px"><h2 class="grow" style="margin:0">Дневник · заметка дня</h2>
+      <button class="ghost small" id="toDiary">Весь дневник →</button></div>
+    <textarea id="dayNote" style="min-height:120px" placeholder="Что получилось, что мешало, за что благодарен…">${esc(dd.note || '')}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn" id="micBtn">🎤 Надиктовать</button>
+      <span class="mute grow" id="micState"></span></div>
   </div>`;
 
   $('#prevD').onclick = () => { viewDate = addDays(viewDate, -1); render(); };
@@ -319,6 +323,96 @@ function renderToday() {
   $('#view').querySelectorAll('[data-start]').forEach(el => el.onclick = () => { startCat(el.dataset.start); });
   const note = $('#dayNote'); let nt;
   note.oninput = () => { clearTimeout(nt); nt = setTimeout(() => setDay(k, d => { d.note = note.value; }), 600); };
+  $('#micBtn').onclick = () => toggleDictation(note, $('#micBtn'), $('#micState'));
+  $('#toDiary').onclick = () => { stopDictation(); VIEW = 'diary'; render(); window.scrollTo(0, 0); };
+}
+
+/* ---------- voice dictation (Web Speech API) ---------- */
+let REC = null, recOn = false;
+function stopDictation() { recOn = false; try { REC && REC.stop(); } catch {} }
+function toggleDictation(ta, btn, state) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Этот браузер не умеет распознавать речь. Откройте в Chrome или нажмите 🎤 на клавиатуре телефона'); return; }
+  if (recOn) { stopDictation(); return; }
+  const android = /Android/i.test(navigator.userAgent);
+  let committed = ta.value;
+  const save = () => ta.dispatchEvent(new Event('input'));
+  const startOne = () => {
+    REC = new SR(); REC.lang = 'ru-RU'; REC.interimResults = true; REC.continuous = !android;
+    REC.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript.trim(); if (!t) continue;
+        if (e.results[i].isFinal) {
+          const sep = !committed || /\n$/.test(committed) ? '' : /[.!?]\s*$/.test(committed) ? ' ' : '. ';
+          committed += sep + t.charAt(0).toUpperCase() + t.slice(1);
+        } else interim += t + ' ';
+      }
+      ta.value = committed + (interim ? (committed ? ' ' : '') + interim : '');
+      ta.scrollTop = ta.scrollHeight; save();
+    };
+    REC.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { recOn = false; toast('Разрешите доступ к микрофону'); }
+      else if (e.error === 'network') { recOn = false; toast('Для распознавания нужен интернет'); }
+    };
+    REC.onend = () => {
+      if (recOn) { try { startOne(); return; } catch {} }
+      recOn = false; ta.value = committed; save();
+      btn.textContent = '🎤 Надиктовать'; btn.style.background = ''; state.textContent = '';
+    };
+    REC.start();
+  };
+  if (committed && !/\n$/.test(committed)) committed += '\n';
+  recOn = true; btn.textContent = '■ Остановить'; btn.style.background = 'var(--danger)';
+  state.textContent = 'Говорите… текст появится в поле';
+  try { startOne(); } catch { recOn = false; toast('Не удалось включить микрофон'); }
+}
+
+/* ---------- DIARY ---------- */
+let diaryQ = '';
+function diaryEntries() {
+  return Object.entries(S.days).filter(([, d]) => d && (d.note || '').trim())
+    .sort((a, b) => a[0] < b[0] ? 1 : -1);
+}
+const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+const longDate = k => cap(parseKey(k).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).replace(' г.', ''));
+function renderDiary() {
+  const all = diaryEntries(), q = diaryQ.toLowerCase();
+  const list = q ? all.filter(([k, d]) => d.note.toLowerCase().includes(q) || longDate(k).includes(q)) : all;
+  $('#view').innerHTML = `
+  <div class="row" style="margin-bottom:10px"><button class="ghost small" id="dBack">← Сегодня</button><span class="grow"></span>
+    <span class="mute">Записей: ${all.length}</span></div>
+  <div class="card"><h2>Скачать дневник</h2>
+    <div class="row" style="flex-wrap:wrap"><button class="ghost" data-dl="docx">Word (.doc)</button>
+    <button class="ghost" data-dl="txt">Текст (.txt)</button><button class="ghost" data-dl="md">Markdown (.md)</button>
+    <button class="ghost" id="dCopy">Скопировать всё</button></div></div>
+  <input id="dSearch" placeholder="Поиск по дневнику…" value="${esc(diaryQ)}" style="margin-bottom:12px">
+  ${list.map(([k, d]) => `<div class="card"><div class="row"><div class="grow" style="font-weight:700">${esc(longDate(k))}</div>
+      <button class="ghost small" data-open="${k}">✎</button></div>
+      <div style="white-space:pre-wrap;margin-top:6px">${esc(d.note)}</div></div>`).join('')
+    || '<div class="mute">Пока записей нет. Надиктуйте заметку на вкладке «Сегодня».</div>'}`;
+  $('#dBack').onclick = () => { VIEW = 'today'; viewDate = new Date(); render(); };
+  const si = $('#dSearch'); si.oninput = () => { diaryQ = si.value; const p = si.selectionStart; render(); const n = $('#dSearch'); n.focus(); n.setSelectionRange(p, p); };
+  $('#view').querySelectorAll('[data-open]').forEach(b => b.onclick = () => { VIEW = 'today'; viewDate = parseKey(b.dataset.open); render(); setTimeout(() => $('#dayNote')?.focus(), 50); });
+  $('#view').querySelectorAll('[data-dl]').forEach(b => b.onclick = () => downloadDiary(b.dataset.dl));
+  $('#dCopy').onclick = async () => { try { await navigator.clipboard.writeText(diaryText('txt')); toast('Дневник скопирован'); } catch { toast('Не удалось скопировать'); } };
+}
+function diaryText(fmt) {
+  const e = diaryEntries().reverse();
+  if (fmt === 'md') return '# Дневник\n\n' + e.map(([k, d]) => `## ${longDate(k)}\n\n${d.note.trim()}\n`).join('\n');
+  return 'ДНЕВНИК\n\n' + e.map(([k, d]) => `${longDate(k).toUpperCase()}\n\n${d.note.trim()}\n`).join('\n————————————\n\n');
+}
+function downloadDiary(fmt) {
+  let blob, ext = fmt;
+  if (fmt === 'docx') {
+    const body = diaryEntries().reverse().map(([k, d]) => `<h2>${esc(longDate(k))}</h2>` +
+      d.note.trim().split('\n').map(p => `<p>${esc(p)}</p>`).join('')).join('');
+    blob = new Blob(['\ufeff<html><head><meta charset="utf-8"><title>Дневник</title></head><body style="font-family:Calibri,Arial;font-size:12pt"><h1>Дневник</h1>' + body + '</body></html>'], { type: 'application/msword' });
+    ext = 'doc';
+  } else blob = new Blob(['\ufeff' + diaryText(fmt)], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `Дневник_${dkey(new Date())}.${ext}`; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 /* ---------- TIME LOG ---------- */
@@ -588,7 +682,7 @@ function editBlock(id) {
 
 /* ---------- boot ---------- */
 function clock() { $('#clock').textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }
-clock(); setInterval(() => { clock(); if (VIEW === 'today' && $('#dlg').classList.contains('hidden') && document.activeElement?.tagName !== 'TEXTAREA') renderToday(); }, 60000);
+clock(); setInterval(() => { clock(); if (VIEW === 'today' && !recOn && $('#dlg').classList.contains('hidden') && document.activeElement?.tagName !== 'TEXTAREA') renderToday(); }, 60000);
 persist(true); render();
 if (syncReady()) { setDot('', 'Ожидает синхронизации'); sync(); } else setDot('', 'Синхронизация не настроена');
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); render(); } });

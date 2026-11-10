@@ -1,5 +1,5 @@
 // Service worker: keeps the app working offline. Bump VERSION on each release.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png'];
 
