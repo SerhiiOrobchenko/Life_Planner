@@ -130,7 +130,7 @@ if (!S || !S.v) S = seed();
 COLLECTIONS.forEach(c => S[c] = S[c] || {});
 try { CFG = JSON.parse(localStorage.getItem(LS_CFG)) || {}; } catch { CFG = {}; }
 CFG.owner = CFG.owner || 'SerhiiOrobchenko';
-CFG.repo = CFG.repo || 'life-planner-data';
+if (!CFG.repo || CFG.repo === 'life-planner-data') CFG.repo = 'Life_Planner_Data';
 // Подключение второго устройства по QR-коду / ссылке: #setup=<base64 json>
 if (location.hash.startsWith('#setup=')) {
   try {
@@ -193,6 +193,7 @@ async function sync(manual) {
       const g = await fetch(url + '?t=' + now(), { headers, cache: 'no-store' });
       let sha, remote = null;
       if (g.status === 200) { const j = await g.json(); sha = j.sha; remote = JSON.parse(b64dec(j.content)); }
+      else if (g.status === 401) throw new Error('ключ неверный или истёк — создайте новый');
       else if (g.status !== 404) throw new Error('GitHub ответил ' + g.status);
       const merged = remote ? merge(S, remote) : S;
       const body = JSON.stringify(merged);
@@ -202,6 +203,8 @@ async function sync(manual) {
         message: 'sync ' + new Date().toISOString(), content: b64enc(body), ...(sha ? { sha } : {}) }) });
       if (p.ok) break;
       if (p.status === 409 || p.status === 422) continue; // changed meanwhile — retry
+      if (p.status === 404) throw new Error(`нет доступа к репозиторию ${CFG.owner}/${CFG.repo} — проверьте название и что ключ выдан на этот репозиторий`);
+      if (p.status === 403) throw new Error('у ключа нет права Contents: Read and write');
       throw new Error('GitHub ответил ' + p.status);
     }
     CFG.lastSync = now(); saveCfg();
@@ -518,7 +521,7 @@ function renderSettings() {
   <div class="card"><h2>Синхронизация телефон ↔ компьютер</h2>
     <div class="mute">Данные хранятся в вашем приватном репозитории GitHub (файл data.json).</div>
     <label>Логин GitHub</label><input id="so" value="${esc(CFG.owner || '')}" autocomplete="off">
-    <label>Приватный репозиторий для данных</label><input id="sr" value="${esc(CFG.repo || '')}" placeholder="life-planner-data" autocomplete="off">
+    <label>Приватный репозиторий для данных</label><input id="sr" value="${esc(CFG.repo || '')}" placeholder="Life_Planner_Data" autocomplete="off">
     <label>Токен доступа</label><input id="st" type="password" value="${esc(CFG.token || '')}" autocomplete="off">
     <div class="row" style="margin-top:10px"><span class="grow mute">${CFG.lastSync ? 'Последняя синхронизация: ' + new Date(CFG.lastSync).toLocaleString('ru-RU') : 'Ещё не синхронизировано'}</span>
     <button class="btn" id="ssave">Сохранить и синхронизировать</button></div></div>
