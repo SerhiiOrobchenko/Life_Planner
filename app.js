@@ -267,7 +267,9 @@ async function testNotif() {
 /* ---------- sync (GitHub contents API) ---------- */
 function merge(a, b) {
   const out = { v: Math.max(a.v || 0, b.v || 0, VERSION) };
-  COLLECTIONS.forEach(c => {
+  // все коллекции, включая неизвестные этой версии (чтобы старая версия не стирала новые разделы)
+  const cols = new Set([...COLLECTIONS, ...Object.keys(a), ...Object.keys(b)].filter(c => c !== 'v' && (typeof (a[c] ?? b[c]) === 'object')));
+  cols.forEach(c => {
     const x = a[c] || {}, y = b[c] || {}, r = {};
     new Set([...Object.keys(x), ...Object.keys(y)]).forEach(k => {
       const p = x[k], q = y[k]; r[k] = !p ? q : !q ? p : ((q.u || 0) > (p.u || 0) ? q : p);
@@ -866,8 +868,8 @@ function renderBooks() {
   ${q ? `<div class="mute" style="margin:10px 2px">Найдено во всех полках: ${shelf.length}</div>` : `<div class="days" style="margin-top:12px">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button data-bt="${k}" class="${k === bookTab ? 'on' : ''}" style="min-width:auto;padding:8px 6px;font-size:12px">${n}<small>${counts[k]}</small></button>`).join('')}</div>`}
   ${!q && bookTab === 'want' ? `<div class="chips" style="margin-bottom:12px">${[['all', 'Все', counts.want], ['home', 'Есть дома', ownCnt], ['buy', 'Купить', buyCnt]].map(([k, n, c]) =>
       `<button class="chip ${ownFilter === k ? 'on' : ''}" data-of="${k}">${n} · ${c}</button>`).join('')}</div>` : ''}
-  ${Object.keys(catCounts).length > 1 ? `<div class="days" style="padding-bottom:12px">${[['all', 'Все темы', shelf.length], ...Object.entries(BOOK_CATS).filter(([k]) => catCounts[k]).map(([k, v]) => [k, v.n, catCounts[k]])].map(([k, n, c]) =>
-      `<button data-cf="${k}" class="${bookCatF === k ? 'on' : ''}" style="flex:none;min-width:auto;padding:7px 12px;font-size:12px;white-space:nowrap">${k !== 'all' ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${BOOK_CATS[k].c};margin-right:5px"></span>` : ''}${n} · ${c}</button>`).join('')}</div>` : ''}
+  ${Object.keys(catCounts).length > 1 ? `<div class="days" style="padding-bottom:12px;flex-wrap:wrap;overflow:visible">${[['all', 'Все темы', shelf.length], ...Object.entries(BOOK_CATS).filter(([k]) => catCounts[k]).map(([k, v]) => [k, v.n, catCounts[k]])].map(([k, n, c]) =>
+      `<button data-cf="${k}" class="${bookCatF === k ? 'on' : ''}" style="flex:0 0 auto;min-width:auto;padding:7px 12px;font-size:12px;white-space:nowrap">${k !== 'all' ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${BOOK_CATS[k].c};margin-right:5px"></span>` : ''}${n} · ${c}</button>`).join('')}</div>` : ''}
   ${list.map(([id, b]) => { const p = bPct(b), bc = (BOOK_CATS[b.cat] || BOOK_CATS.other);
     return `<div class="card" data-bo="${id}" style="display:flex;gap:14px;cursor:pointer;align-items:center">
       ${cover(b, 54, id)}
