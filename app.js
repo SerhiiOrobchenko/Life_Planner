@@ -46,6 +46,12 @@ const live = obj => Object.entries(obj || {}).filter(([, v]) => v && !v.deleted)
 const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
 const longDate = k => cap(parseKey(k).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).replace(' г.', ''));
 const shortDate = d => cap(d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }));
+const blockLen = b => { let l = toMin(b.end) - toMin(b.start); if (l <= 0) l += 1440; return l; };
+const fmtShort = min => { const h = Math.floor(min / 60), m = min % 60; return h ? `${h} ч${m ? ' ' + m + ' мин' : ''}` : `${m} мин`; };
+const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const LN = NATIVE ? window.Capacitor.Plugins.LocalNotifications : null;
+const APK_URL = 'https://serhiiorobchenko.github.io/Life_Planner/MoyDen.apk';
+const blockNotify = b => b.n !== undefined ? !!b.n : (!['food', 'home', 'sleep'].includes(b.cat) || /^Экраны/.test(b.title));
 const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
 const catOf = b => CATS[b.cat] || CATS.home;
 const icon = (cat, size = 38) => { const c = CATS[cat] || CATS.home;
@@ -167,6 +173,11 @@ S = migrate(S);
 try { CFG = JSON.parse(localStorage.getItem(LS_CFG)) || {}; } catch { CFG = {}; }
 CFG.owner = CFG.owner || 'SerhiiOrobchenko';
 if (!CFG.repo || CFG.repo === 'life-planner-data') CFG.repo = 'Life_Planner_Data';
+CFG.notif = Object.assign({ on: true, sound: true, lead: 0 }, CFG.notif || {});
+function applySetupLink(str) {
+  const m = String(str).match(/#setup=([A-Za-z0-9+/=]+)/); if (!m) return false;
+  const c = JSON.parse(decodeURIComponent(escape(atob(m[1])))); Object.assign(CFG, { owner: c.o, repo: c.r, token: c.t }); localStorage.setItem(LS_CFG, JSON.stringify(CFG)); return true;
+}
 if (location.hash.startsWith('#setup=')) {
   try {
     const c = JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(7)))));
@@ -178,6 +189,7 @@ if (location.hash.startsWith('#setup=')) {
 }
 
 function persist(silent) {
+  scheduleNotifs();
   try { localStorage.setItem(LS_STATE, JSON.stringify(S)); } catch { toast('Не удалось сохранить'); }
   if (!silent) scheduleSync();
 }
@@ -197,6 +209,47 @@ function habitDone(k, hid) {
   return blocksFor(k).some(b => b.h === hid && d.marks?.[b.id]);
 }
 function isCurrent(b, m) { const s = toMin(b.start), e = toMin(b.end); return s < e ? m >= s && m < e : m >= s || m < e; }
+
+/* ---------- notifications (Android app) ---------- */
+let notifTimer = null;
+function scheduleNotifs() { if (!LN) return; clearTimeout(notifTimer); notifTimer = setTimeout(rescheduleNotifs, 1500); }
+async function ensureNotifPerm() {
+  let p = await LN.checkPermissions(); if (p.display !== 'granted') p = await LN.requestPermissions();
+  return p.display === 'granted';
+}
+async function rescheduleNotifs() {
+  if (!LN) return;
+  try {
+    const pend = await LN.getPending();
+    if (pend.notifications.length) await LN.cancel({ notifications: pend.notifications.map(n => ({ id: n.id })) });
+    if (!CFG.notif.on || !(await ensureNotifPerm())) return;
+    try {
+      await LN.createChannel({ id: 'plan-sound', name: 'Расписание (со звуком)', importance: 4, visibility: 1, vibration: true });
+      await LN.createChannel({ id: 'plan-quiet', name: 'Расписание (без звука)', importance: 2, visibility: 1, vibration: false });
+    } catch {}
+    const list = [], t = now(), lead = (CFG.notif.lead || 0) * 60000;
+    for (let i = 0; i < 14; i++) {
+      const date = addDays(new Date(), i), k = dkey(date);
+      blocksFor(k).forEach((b, j) => {
+        if (!blockNotify(b)) return;
+        const at = new Date(date.getFullYear(), date.getMonth(), date.getDate(), ...b.start.split(':').map(Number)).getTime() - lead;
+        if (at <= t + 5000) return;
+        list.push({ id: i * 1000 + j + 1, title: (CFG.notif.lead ? `Через ${CFG.notif.lead} мин: ` : '') + b.title,
+          body: `${b.start}–${b.end} · ${fmtShort(blockLen(b))}` + (b.note ? '\n' + b.note.split('\n')[0] : ''),
+          schedule: { at: new Date(at), allowWhileIdle: true }, channelId: CFG.notif.sound ? 'plan-sound' : 'plan-quiet', smallIcon: 'ic_stat_notify' });
+      });
+    }
+    if (list.length) await LN.schedule({ notifications: list });
+    CFG.notif.count = list.length; saveCfg();
+  } catch (e) { console.log('notif', e); }
+}
+async function testNotif() {
+  if (!LN) return toast('Уведомления работают в Android-приложении');
+  if (!(await ensureNotifPerm())) return toast('Разрешите уведомления в настройках телефона');
+  await LN.schedule({ notifications: [{ id: 999999, title: 'Мой день', body: 'Так будут выглядеть напоминания', schedule: { at: new Date(Date.now() + 5000), allowWhileIdle: true },
+    channelId: CFG.notif.sound ? 'plan-sound' : 'plan-quiet', smallIcon: 'ic_stat_notify' }] });
+  toast('Уведомление придёт через 5 секунд');
+}
 
 /* ---------- sync (GitHub contents API) ---------- */
 function merge(a, b) {
@@ -306,7 +359,7 @@ function renderToday() {
     let passed = m - s; if (passed < 0) passed += 1440; const left = len - passed, c = catOf(cur);
     nowCard = `<div class="now" style="background:${c.c}">
       <i class="ti ${c.i} bg"></i>
-      <div class="k">Сейчас · ${cur.start}–${cur.end}</div><div class="tt">${esc(cur.title)}</div>
+      <div class="k">Сейчас · ${cur.start}–${cur.end} · ${fmtShort(len)}</div><div class="tt">${esc(cur.title)}</div>
       <div class="bar"><div style="width:${Math.round(passed / len * 100)}%"></div></div>
       <div class="row" style="font-size:13px;font-weight:600"><span class="grow">Осталось ${fmtH(left)}</span>${next ? `<span style="opacity:.85">Дальше: ${esc(next.title)}</span>` : ''}</div>
     </div>`;
@@ -331,7 +384,7 @@ function renderToday() {
         ${icon(b.cat)}
         <div class="body" data-open="${b.id}">
           <div class="ttl">${esc(b.title)}</div>
-          ${hn || b.note ? `<div class="meta">${hn ? `<span class="tag" style="background:color-mix(in srgb,${c.c} 13%,transparent);color:${c.c}"><i class="ti ti-repeat"></i>${esc(hn)}</span>` : ''}${b.note ? ' <i class="ti ti-notes"></i>' : ''}</div>` : ''}
+          <div class="meta"><span style="font-weight:700;color:var(--ink2)">${fmtShort(blockLen(b))}</span>${NATIVE && CFG.notif.on && blockNotify(b) ? ' <i class="ti ti-bell"></i>' : ''}${b.note ? ' <i class="ti ti-notes"></i>' : ''}${hn ? ` <span class="tag" style="background:color-mix(in srgb,${c.c} 13%,transparent);color:${c.c}"><i class="ti ti-repeat"></i>${esc(hn)}</span>` : ''}</div>
           ${b.note ? `<div class="note hidden" id="n-${b.id}">${esc(b.note)}</div>` : ''}
         </div>
         ${b.cat !== 'sleep' || b.h ? `<button class="chk ${mk ? 'on' : ''}" data-mark="${b.id}" aria-label="Отметить"><i class="ti ti-check"></i></button>` : '<span style="width:32px"></span>'}
@@ -387,6 +440,7 @@ function editBlock(scope, key, id) {
     <div class="grow"><label class="l">Конец</label><input type="time" id="be" value="${b.end}"></div></div>
     <label class="l">Название</label><input id="bt" value="${esc(b.title)}" placeholder="Например: Английский — грамматика">
     <label class="l">Сфера</label>${catPicker(b.cat)}
+    <label class="row chip" style="margin-top:14px;box-shadow:none;background:var(--card2)"><input type="checkbox" id="bnot" style="width:auto" ${blockNotify(b) ? 'checked' : ''}><i class="ti ti-bell"></i><span class="grow">Напоминание в начале</span></label>
     <label class="l">Галочка засчитывается в привычку</label><select id="bh">${habitOptions(b.h)}</select>
     <label class="l">Что именно делать</label><textarea id="bn" placeholder="Упражнения, книга, тема…">${esc(b.note || '')}</textarea>
     <div class="row" style="margin-top:16px">${id ? '<button class="btn2 danger" id="bdel"><i class="ti ti-trash"></i> Удалить</button>' : ''}<span class="grow"></span>
@@ -401,7 +455,7 @@ function editBlock(scope, key, id) {
     $('#bdel') && ($('#bdel').onclick = () => apply(list => list.filter(x => x.id !== id)));
     $('#bok').onclick = () => {
       if (!$('#bt').value.trim()) return toast('Введите название');
-      const nb = { id: id || uid(), start: $('#bs').value, end: $('#be').value, title: $('#bt').value.trim(), cat: pickedCat(root), h: $('#bh').value, note: $('#bn').value.trim() };
+      const nb = { id: id || uid(), start: $('#bs').value, end: $('#be').value, title: $('#bt').value.trim(), cat: pickedCat(root), h: $('#bh').value, note: $('#bn').value.trim(), n: $('#bnot').checked };
       apply(list => id ? list.map(x => x.id === id ? nb : x) : [...list, nb]);
     };
   });
@@ -419,7 +473,7 @@ function renderPlan() {
     `<span class="tag" style="background:color-mix(in srgb,${CATS[c].c} 13%,transparent);color:${CATS[c].c};font-size:12px;padding:5px 9px"><i class="ti ${CATS[c].i}"></i>${CATS[c].n} ${fmtH(v)}</span>`).join('')}</div>
   <div class="tl">${blocks.map(b => `<div class="blk" data-pe="${b.id}" style="cursor:pointer">
       <div class="tm">${b.start}<small>${b.end}</small></div>${icon(b.cat)}
-      <div class="body"><div class="ttl">${esc(b.title)}</div>${b.note ? `<div class="meta">${esc(b.note.split('\n')[0]).slice(0, 70)}</div>` : ''}</div>
+      <div class="body"><div class="ttl">${esc(b.title)}</div><div class="meta"><b style="color:var(--ink2)">${fmtShort(blockLen(b))}</b>${blockNotify(b) ? ' <i class="ti ti-bell"></i>' : ''}${b.note ? ' · ' + esc(b.note.split('\n')[0]).slice(0, 60) : ''}</div></div>
       <i class="ti ti-chevron-right" style="color:var(--mute)"></i></div>`).join('') || '<div class="mute" style="padding:14px">Пусто</div>'}</div>
   <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
     <button class="btn2 acc" id="padd"><i class="ti ti-plus"></i> Добавить в ${dn[2].toLowerCase()}</button>
@@ -582,8 +636,29 @@ function editGoal(id) {
 
 /* ---------- voice dictation ---------- */
 let REC = null, recOn = false;
-function stopDictation() { recOn = false; try { REC && REC.stop(); } catch {} }
+function stopDictation() { const was = recOn; recOn = false; try { REC && REC.stop(); } catch {} if (was && nativeSR) { nativeSR.stop(); nativeSR = null; } }
+let nativeSR = null;
+async function nativeDictation(ta, btn, state) {
+  const SRp = window.Capacitor.Plugins.SpeechRecognition;
+  if (recOn) { stopDictation(); try { await SRp.stop(); } catch {} return; }
+  try { const p = await SRp.requestPermissions(); if (p.speechRecognition !== 'granted') return toast('Разрешите доступ к микрофону'); } catch {}
+  let committed = ta.value; if (committed && !/\n$/.test(committed)) committed += '\n';
+  let current = '';
+  const save = () => ta.dispatchEvent(new Event('input'));
+  const commit = () => { const t = current.trim(); current = ''; if (!t) return;
+    const sep = !committed || /\n$/.test(committed) ? '' : /[.!?]\s*$/.test(committed) ? ' ' : '. ';
+    committed += sep + cap(t); ta.value = committed; save(); };
+  const finish = () => { commit(); recOn = false; btn.innerHTML = '<i class="ti ti-microphone"></i> Надиктовать'; btn.style.background = ''; state.textContent = ''; SRp.removeAllListeners(); };
+  await SRp.removeAllListeners();
+  SRp.addListener('partialResults', d => { current = (d.matches && d.matches[0]) || ''; ta.value = committed + (committed && !/\n$/.test(committed) ? ' ' : '') + current; ta.scrollTop = ta.scrollHeight; });
+  SRp.addListener('listeningState', d => { if (d.status !== 'stopped') return; commit();
+    if (recOn) setTimeout(() => { if (recOn) SRp.start({ language: 'ru-RU', partialResults: true, popup: false }).catch(finish); }, 250); else finish(); });
+  recOn = true; btn.innerHTML = '<i class="ti ti-player-stop"></i> Остановить'; btn.style.background = 'var(--danger)'; state.textContent = 'Говорите…';
+  nativeSR = { stop: () => SRp.stop().catch(() => {}).finally(finish) };
+  SRp.start({ language: 'ru-RU', partialResults: true, popup: false }).catch(() => { finish(); toast('Распознавание речи недоступно'); });
+}
 function toggleDictation(ta, btn, state) {
+  if (NATIVE && window.Capacitor.Plugins.SpeechRecognition) return nativeDictation(ta, btn, state);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { toast('Этот браузер не распознаёт речь. Откройте в Chrome или нажмите 🎤 на клавиатуре'); return; }
   if (recOn) { stopDictation(); return; }
@@ -670,6 +745,17 @@ function renderSettings() {
   <div class="sec" style="margin-top:4px"><h2>Привычки</h2><button class="link" id="hadd"><i class="ti ti-plus"></i> Добавить</button></div>
   <div class="tl">${habits.map(([id, h], i) => `<div class="blk"><div style="cursor:pointer" class="row grow" data-he="${id}">${icon(h.cat, 34)}<div class="grow"><div class="ttl">${esc(h.name)}</div><div class="meta">${h.target || 7} раз в неделю</div></div></div>
     <button class="chk" data-hu="${id}" aria-label="Выше" style="color:var(--ink2);${i === 0 ? 'visibility:hidden' : ''}"><i class="ti ti-arrow-up"></i></button></div>`).join('')}</div>
+  <div class="sec"><h2>Уведомления</h2></div>
+  <div class="card">
+    ${NATIVE ? `
+    <label class="row" style="padding:4px 0"><span class="grow"><b>Напоминания по расписанию</b><div class="mute">Колокольчик у дела включается в его настройках</div></span><input type="checkbox" id="nOn" style="width:auto;transform:scale(1.4)" ${CFG.notif.on ? 'checked' : ''}></label>
+    <label class="row" style="padding:10px 0 4px"><span class="grow"><b>Звук</b></span><input type="checkbox" id="nSnd" style="width:auto;transform:scale(1.4)" ${CFG.notif.sound ? 'checked' : ''}></label>
+    <label class="l">Когда напоминать</label>
+    <div class="days" id="nLead">${[[0, 'в начале'], [5, 'за 5 мин'], [10, 'за 10 мин']].map(([v, t]) => `<button type="button" data-lead="${v}" class="${(CFG.notif.lead || 0) === v ? 'on' : ''}">${t}</button>`).join('')}</div>
+    <div class="row"><span class="mute grow">Запланировано: ${CFG.notif.count ?? 0} на 2 недели вперёд</span><button class="btn2 acc" id="nTest"><i class="ti ti-bell-ringing"></i> Проверить</button></div>`
+    : `<div class="mute">Напоминания со звуком работают в Android-приложении. Установите его, откройте и вставьте ссылку подключения (ниже).</div>
+       <a class="btn" href="${APK_URL}" style="display:inline-flex;gap:6px;margin-top:12px;text-decoration:none"><i class="ti ti-brand-android"></i> Скачать приложение для Android</a>`}
+  </div>
   <div class="sec"><h2>Синхронизация</h2></div>
   <div class="card">
     <div class="mute">Данные хранятся в вашем закрытом репозитории GitHub.${CFG.lastErr ? ` <span style="color:var(--danger)">Ошибка: ${esc(CFG.lastErr)}</span>` : ''}</div>
@@ -677,6 +763,8 @@ function renderSettings() {
     <label class="l">Репозиторий для данных</label><input id="sr" value="${esc(CFG.repo || '')}" autocomplete="off">
     <label class="l">Ключ доступа</label><input id="st" type="password" value="${esc(CFG.token || '')}" autocomplete="off">
     <button class="btn" id="ssave" style="width:100%;margin-top:14px"><i class="ti ti-refresh"></i> Сохранить и синхронизировать</button>
+    ${CFG.token ? `<button class="btn2" id="copyLink" style="width:100%;margin-top:8px"><i class="ti ti-link"></i> Скопировать ссылку подключения</button>` : ''}
+    <label class="l">Подключить по ссылке</label><div class="row"><input id="linkIn" placeholder="Вставьте ссылку подключения"><button class="btn2 acc" id="linkOk">OK</button></div>
   </div>
   ${CFG.token ? `<div class="card"><div class="row"><i class="ti ti-qrcode" style="font-size:24px;color:var(--accent)"></i><div class="grow"><b>Подключить телефон</b><div class="mute">Наведите камеру телефона на код — приложение откроется подключённым. Не показывайте код другим.</div></div></div>
     <button class="btn2 acc" id="qrbtn" style="margin-top:10px">Показать QR-код</button><div id="qr" class="hidden" style="margin-top:12px;background:#fff;padding:12px;border-radius:14px;width:max-content"></div></div>` : ''}
@@ -688,10 +776,19 @@ function renderSettings() {
   $$('[data-hu]').forEach(b => b.onclick = () => { const i = habits.findIndex(([id]) => id === b.dataset.hu); if (i < 1) return;
     const t = now(), [a, c] = [habits[i - 1], habits[i]], oa = a[1].order ?? i - 1, oc = c[1].order ?? i;
     S.habits[a[0]] = { ...a[1], order: oc === oa ? oa + 1 : oc, u: t }; S.habits[c[0]] = { ...c[1], order: oa, u: t }; persist(); render(); });
+  if (NATIVE) {
+    $('#nOn').onchange = e => { CFG.notif.on = e.target.checked; saveCfg(); rescheduleNotifs().then(render); };
+    $('#nSnd').onchange = e => { CFG.notif.sound = e.target.checked; saveCfg(); rescheduleNotifs(); };
+    $$('[data-lead]').forEach(b => b.onclick = () => { CFG.notif.lead = +b.dataset.lead; saveCfg(); rescheduleNotifs().then(render); });
+    $('#nTest').onclick = testNotif;
+  }
+  const setupLink = () => 'https://serhiiorobchenko.github.io/Life_Planner/#setup=' + btoa(unescape(encodeURIComponent(JSON.stringify({ o: CFG.owner, r: CFG.repo, t: CFG.token }))));
+  $('#copyLink') && ($('#copyLink').onclick = async () => { try { await navigator.clipboard.writeText(setupLink()); toast('Ссылка скопирована. Не отправляйте её другим людям'); } catch { toast('Не удалось скопировать'); } });
+  $('#linkOk').onclick = () => { try { if (applySetupLink($('#linkIn').value)) { toast('Подключено'); sync(true).then(render); } else toast('Это не ссылка подключения'); } catch { toast('Ссылка повреждена'); } };
   $('#ssave').onclick = () => { CFG.owner = $('#so').value.trim(); CFG.repo = $('#sr').value.trim(); CFG.token = $('#st').value.trim(); saveCfg(); sync(true).then(render); };
   $('#qrbtn') && ($('#qrbtn').onclick = () => { const box = $('#qr'); box.classList.toggle('hidden'); if (box.dataset.done) return;
     const payload = btoa(unescape(encodeURIComponent(JSON.stringify({ o: CFG.owner, r: CFG.repo, t: CFG.token }))));
-    const link = location.origin + location.pathname + '#setup=' + payload;
+    const link = 'https://serhiiorobchenko.github.io/Life_Planner/#setup=' + payload;
     if (window.QRCode) { new QRCode(box, { text: link, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.L }); box.dataset.done = 1; }
     else box.textContent = 'QR не загрузился — нужен интернет'; });
   $('#exp').onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(S)); toast('Данные скопированы'); } catch { toast('Не удалось скопировать'); } };
@@ -707,10 +804,10 @@ function renderSettings() {
 }
 
 /* ---------- boot ---------- */
-persist(true); render();
+persist(true); render(); scheduleNotifs();
 setDot(syncReady() ? '' : 'err');
 if (syncReady()) sync();
 setInterval(() => { if (VIEW === 'today' && !recOn && $('#dlg').classList.contains('hidden') && !document.activeElement?.matches('input,textarea')) renderToday(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); if (VIEW === 'today' && !recOn) render(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); scheduleNotifs(); if (VIEW === 'today' && !recOn) render(); } });
 setInterval(() => { if (document.visibilityState === 'visible') sync(); }, 120000);
-if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {} }
+if (!NATIVE && 'serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {} }
