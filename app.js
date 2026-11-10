@@ -761,11 +761,14 @@ const BOOK_CATS = {
   history: { n: 'История и политика', c: '#B5653A' }, money: { n: 'Деньги и бизнес', c: '#C08A1E' }, other: { n: 'Другое', c: '#8A93A0' },
 };
 const BOOK_ST = { reading: ['Читаю', 'ti-book-2'], want: ['Хочу прочитать', 'ti-bookmark'], done: ['Прочитано', 'ti-circle-check'], paused: ['Отложено', 'ti-player-pause'] };
-let bookTab = 'reading', curBook = null, ownFilter = 'all';
+let bookTab = 'reading', curBook = null, ownFilter = 'all', bookQ = '', bookCatF = 'all', bookSort = 'title';
 const booksList = () => live(S.books);
 const bPct = b => b.pages ? Math.min(100, Math.round((b.read || 0) / b.pages * 100)) : (b.status === 'done' ? 100 : 0);
-function cover(b, w = 54) {
+const coverURL = {};
+function cover(b, w = 54, id = '') {
   const c = (BOOK_CATS[b.cat] || BOOK_CATS.other).c, h = Math.round(w * 1.42);
+  if (b.cover && id) { const key = id + '@' + b.cover, src = coverURL[key];
+    return `<img data-cover="${id}" data-cv="${b.cover}" ${src ? `src="${src}"` : ''} alt="" style="width:${w}px;height:${h}px;flex:none;object-fit:cover;border-radius:6px 10px 10px 6px;background:${c};box-shadow:0 2px 6px rgba(0,0,0,.15)">`; }
   const ini = (b.title || '?').split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
   return `<div style="width:${w}px;height:${h}px;flex:none;border-radius:6px 10px 10px 6px;background:${c};color:#fff;position:relative;overflow:hidden;
     box-shadow:inset 4px 0 0 rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.12);display:flex;align-items:flex-end;padding:6px">
@@ -782,14 +785,70 @@ function readingLine() {
 function pagesInRange(from, to) {
   let n = 0; booksList().forEach(([, b]) => { (b.log || []).forEach(l => { if (l.d >= from && l.d <= to) n += Math.max(0, l.delta || 0); }); }); return n;
 }
+async function coverCache() { try { return await caches.open('covers'); } catch { return null; } }
+const coverReq = (id, v) => new Request(`${location.origin}/__covers__/${id}?v=${v}`);
+function ghCoverUrl(id) { return `https://api.github.com/repos/${encodeURIComponent(CFG.owner)}/${encodeURIComponent(CFG.repo)}/contents/covers/${id}.jpg`; }
+async function loadCovers() {
+  const imgs = $$('img[data-cover]').filter(i => !i.getAttribute('src'));
+  for (const img of imgs) {
+    const id = img.dataset.cover, v = img.dataset.cv, key = id + '@' + v;
+    try {
+      if (!coverURL[key]) {
+        const cache = await coverCache(); let res = cache && await cache.match(coverReq(id, v));
+        if (!res && syncReady()) {
+          const r = await fetch(ghCoverUrl(id) + '?t=' + v, { headers: { Authorization: `Bearer ${CFG.token}`, Accept: 'application/vnd.github.raw' } });
+          if (r.ok) { const blob = await r.blob(); res = new Response(blob); cache && cache.put(coverReq(id, v), new Response(blob)); }
+        }
+        if (res) coverURL[key] = URL.createObjectURL(await res.blob());
+      }
+      if (coverURL[key]) $$(`img[data-cover="${id}"]`).forEach(x => x.src = coverURL[key]);
+    } catch {}
+  }
+}
+async function resizeImage(file, max = 420) {
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
+  const k = Math.min(1, max / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+  cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
+  return await new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.82));
+}
+function pickCover(id) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    toast('Загружаю обложку…');
+    try {
+      const blob = await resizeImage(f), v = String(now());
+      const cache = await coverCache(); cache && await cache.put(coverReq(id, v), new Response(blob));
+      coverURL[id + '@' + v] = URL.createObjectURL(blob);
+      updBook(id, b => { b.cover = v; }); render();
+      if (syncReady()) {
+        const headers = { Authorization: `Bearer ${CFG.token}`, Accept: 'application/vnd.github+json' };
+        const g = await fetch(ghCoverUrl(id) + '?t=' + v, { headers, cache: 'no-store' }); const sha = g.ok ? (await g.json()).sha : undefined;
+        const b64 = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.readAsDataURL(blob); });
+        const p = await fetch(ghCoverUrl(id), { method: 'PUT', headers, body: JSON.stringify({ message: 'cover ' + id, content: b64, ...(sha ? { sha } : {}) }) });
+        toast(p.ok ? 'Обложка сохранена' : 'Обложка сохранена только на этом устройстве');
+      } else toast('Обложка сохранена на этом устройстве');
+    } catch { toast('Не удалось загрузить фото'); }
+  };
+  inp.click();
+}
 function openBook(id) { if (id === 'new') return editBook(null); curBook = id; VIEW = 'book'; $$('#nav button').forEach(x => x.classList.toggle('on', x.dataset.v === 'books')); render(); window.scrollTo(0, 0); }
 function renderBooks() {
   const all = booksList(), year = String(new Date().getFullYear());
   const ws = weekStart(new Date()), weekPages = pagesInRange(dkey(ws), dkey(addDays(ws, 6)));
   const doneYear = all.filter(([, b]) => b.status === 'done' && (b.finished || '').startsWith(year)).length;
   const counts = Object.fromEntries(Object.keys(BOOK_ST).map(k => [k, all.filter(([, b]) => b.status === k).length]));
-  const list = all.filter(([, b]) => b.status === bookTab && (bookTab !== 'want' || ownFilter === 'all' || (ownFilter === 'home') === !!b.owned))
-    .sort((a, b) => bookTab === 'want' ? (a[1].title || '').localeCompare(b[1].title || '', 'ru') : (b[1].u || 0) - (a[1].u || 0));
+  const q = bookQ.trim().toLowerCase();
+  const hay = b => [b.title, b.author, b.note, ...(b.works || []).map(w => w.t)].join(' ').toLowerCase();
+  const shelf = all.filter(([, b]) => q ? hay(b).includes(q) : b.status === bookTab && (bookTab !== 'want' || ownFilter === 'all' || (ownFilter === 'home') === !!b.owned));
+  const catCounts = {}; shelf.forEach(([, b]) => { catCounts[b.cat] = (catCounts[b.cat] || 0) + 1; });
+  if (bookCatF !== 'all' && !catCounts[bookCatF]) bookCatF = 'all';
+  const cmp = (x, y) => (x || '').localeCompare(y || '', 'ru');
+  const sorters = { title: (a, b) => cmp(a[1].title, b[1].title), author: (a, b) => cmp(a[1].author, b[1].author) || cmp(a[1].title, b[1].title),
+    recent: (a, b) => (b[1].u || 0) - (a[1].u || 0), progress: (a, b) => bPct(b[1]) - bPct(a[1]) };
+  const list = shelf.filter(([, b]) => bookCatF === 'all' || b.cat === bookCatF).sort(sorters[bookSort] || sorters.title);
   const ownCnt = all.filter(([, b]) => b.status === 'want' && b.owned).length, buyCnt = counts.want - ownCnt;
   $('#sub').textContent = `${all.length} книг в библиотеке`;
   $('#view').innerHTML = `
@@ -798,14 +857,24 @@ function renderBooks() {
     <div class="metric"><div class="v">${weekPages}</div><div class="n">страниц за неделю</div></div>
     <div class="metric"><div class="v">${doneYear}</div><div class="n">прочитано в ${year}</div></div>
   </div>
-  <div class="days" style="margin-top:12px">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button data-bt="${k}" class="${k === bookTab ? 'on' : ''}" style="min-width:auto;padding:8px 6px;font-size:12px">${n}<small>${counts[k]}</small></button>`).join('')}</div>
-  ${bookTab === 'want' ? `<div class="chips" style="margin-bottom:12px">${[['all', 'Все', counts.want], ['home', 'Есть дома', ownCnt], ['buy', 'Купить', buyCnt]].map(([k, n, c]) =>
+  <div class="row" style="margin-top:12px;gap:8px">
+    <div class="grow" style="position:relative"><i class="ti ti-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--mute)"></i>
+      <input id="bkQ" value="${esc(bookQ)}" placeholder="Поиск: название, автор…" style="padding-left:36px;background:var(--card)"></div>
+    <select id="bkSort" style="width:auto;background:var(--card);font-size:13px;font-weight:600">
+      ${[['title', 'А–Я'], ['author', 'По автору'], ['recent', 'Недавние'], ['progress', 'Прогресс']].map(([k, n]) => `<option value="${k}" ${k === bookSort ? 'selected' : ''}>${n}</option>`).join('')}</select>
+  </div>
+  ${q ? `<div class="mute" style="margin:10px 2px">Найдено во всех полках: ${shelf.length}</div>` : `<div class="days" style="margin-top:12px">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button data-bt="${k}" class="${k === bookTab ? 'on' : ''}" style="min-width:auto;padding:8px 6px;font-size:12px">${n}<small>${counts[k]}</small></button>`).join('')}</div>`}
+  ${!q && bookTab === 'want' ? `<div class="chips" style="margin-bottom:12px">${[['all', 'Все', counts.want], ['home', 'Есть дома', ownCnt], ['buy', 'Купить', buyCnt]].map(([k, n, c]) =>
       `<button class="chip ${ownFilter === k ? 'on' : ''}" data-of="${k}">${n} · ${c}</button>`).join('')}</div>` : ''}
+  ${Object.keys(catCounts).length > 1 ? `<div class="days" style="padding-bottom:12px">${[['all', 'Все темы', shelf.length], ...Object.entries(BOOK_CATS).filter(([k]) => catCounts[k]).map(([k, v]) => [k, v.n, catCounts[k]])].map(([k, n, c]) =>
+      `<button data-cf="${k}" class="${bookCatF === k ? 'on' : ''}" style="flex:none;min-width:auto;padding:7px 12px;font-size:12px;white-space:nowrap">${k !== 'all' ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${BOOK_CATS[k].c};margin-right:5px"></span>` : ''}${n} · ${c}</button>`).join('')}</div>` : ''}
   ${list.map(([id, b]) => { const p = bPct(b), bc = (BOOK_CATS[b.cat] || BOOK_CATS.other);
     return `<div class="card" data-bo="${id}" style="display:flex;gap:14px;cursor:pointer;align-items:center">
-      ${cover(b)}
+      ${cover(b, 54, id)}
       <div class="grow">
         <div style="font-weight:800;font-size:16px;line-height:1.25">${esc(b.title)}</div>
+        ${q ? `<span class="tag" style="background:var(--accent-soft);color:var(--accent);margin:3px 0">${BOOK_ST[b.status][0]}</span>` : ''}
+        ${(b.works || []).length ? `<div class="mute" style="font-size:12px"><i class="ti ti-stack-2"></i> ${b.works.length} произв.: ${esc(b.works.map(w => w.t).join(', '))}</div>` : ''}
         <div class="mute">${esc(b.author || '')}${b.author ? ' · ' : ''}<span style="color:${bc.c};font-weight:600">${bc.n}</span>
           ${b.owned ? ' · <i class="ti ti-home"></i> дома' : b.status === 'want' ? ' · <i class="ti ti-shopping-cart"></i> купить' : ''}</div>
         ${b.status === 'want' && b.note ? `<div class="mute" style="margin-top:4px;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(b.note)}</div>` : ''}
@@ -816,6 +885,10 @@ function renderBooks() {
   <button class="btn" id="badd" style="width:100%"><i class="ti ti-plus"></i> Добавить книгу</button>`;
   $$('[data-bt]').forEach(b => b.onclick = () => { bookTab = b.dataset.bt; render(); });
   $$('[data-of]').forEach(b => b.onclick = () => { ownFilter = b.dataset.of; render(); });
+  $$('[data-cf]').forEach(b => b.onclick = () => { bookCatF = b.dataset.cf; render(); });
+  $('#bkSort').onchange = e => { bookSort = e.target.value; render(); };
+  const qi = $('#bkQ'); qi.oninput = () => { bookQ = qi.value; const pos = qi.selectionStart; render(); const n = $('#bkQ'); n.focus(); n.setSelectionRange(pos, pos); };
+  loadCovers();
   $$('[data-bo]').forEach(b => b.onclick = () => openBook(b.dataset.bo));
   $('#badd').onclick = () => editBook(null);
 }
@@ -835,7 +908,8 @@ function renderBook() {
   $('#view').innerHTML = `
   <button class="link" id="bkBack" style="margin:0 0 10px -4px"><i class="ti ti-arrow-left"></i> Все книги</button>
   <div class="card" style="display:flex;gap:16px;align-items:center">
-    ${cover(b, 84)}
+    <div id="bkCover" style="position:relative;cursor:pointer">${cover(b, 84, id)}
+      <span style="position:absolute;right:-6px;bottom:-6px;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;border:2px solid var(--card)"><i class="ti ti-camera"></i></span></div>
     <div class="grow"><div style="font-weight:800;font-size:19px;line-height:1.2">${esc(b.title)}</div>
       <div class="mute" style="margin-top:3px">${esc(b.author || '')}</div>
       <div style="margin-top:6px"><span class="tag" style="background:color-mix(in srgb,${bc.c} 14%,transparent);color:${bc.c}">${bc.n}</span></div>
@@ -843,8 +917,12 @@ function renderBook() {
       ${b.started ? `<div class="mute" style="margin-top:6px;font-size:12px">Начал ${parseKey(b.started).toLocaleDateString('ru-RU')}${b.finished ? ' · закончил ' + parseKey(b.finished).toLocaleDateString('ru-RU') : ''}</div>` : ''}</div>
     <button class="iconbtn" id="bkEdit" style="box-shadow:none;background:var(--card2)"><i class="ti ti-pencil"></i></button>
   </div>
-  ${b.note ? `<div class="card" style="padding:14px"><div class="mute" style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em">Почему хочу прочитать</div>
-    <div style="margin-top:6px;white-space:pre-wrap;line-height:1.55">${esc(b.note).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);word-break:break-all">ссылка</a>')}</div></div>` : ''}
+  <div class="card" style="padding:14px"><div class="row"><i class="ti ti-note" style="color:var(--accent)"></i><b class="grow">Примечание</b><span class="mute" style="font-size:12px">почему хочу прочитать</span></div>
+    <textarea id="bkNoteMain" style="margin-top:8px;min-height:64px" placeholder="Кто посоветовал, чем зацепила, издательство, перевод…">${esc(b.note || '')}</textarea>
+    ${(b.note || '').match(/https?:\/\/\S+/g) ? `<div style="margin-top:6px">${(b.note.match(/https?:\/\/\S+/g)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;font-size:13px"><i class="ti ti-external-link"></i> открыть ссылку</a>`).join(' ')}</div>` : ''}
+  </div>
+  ${(b.works || []).length ? `<div class="card" style="padding:14px"><div class="row"><i class="ti ti-stack-2" style="color:var(--accent)"></i><b class="grow">В этом томе</b><span class="mute">${b.works.filter(w => w.done).length} из ${b.works.length} прочитано</span></div>
+    ${b.works.map(w => `<div class="step ${w.done ? 'done' : ''}"><button class="chk ${w.done ? 'on' : ''}" data-wk="${w.id}"><i class="ti ti-check"></i></button><span>${esc(w.t)}</span></div>`).join('')}</div>` : ''}
   <div class="days">${Object.entries(BOOK_ST).map(([k, [n, i]]) => `<button data-st="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:11px;padding:8px 4px"><i class="ti ${i}" style="font-size:18px"></i><small>${n}</small></button>`).join('')}</div>
   ${b.status !== 'want' ? `<div class="card">
     <div class="row"><div class="ring" style="width:64px;height:64px">${ringSvg(p / 100, bc.c, 64, 7)}<b>${p}%</b></div>
@@ -868,6 +946,12 @@ function renderBook() {
       <div style="white-space:pre-wrap;margin-top:8px;line-height:1.6">${esc(n.t)}</div></div>`).join('')}`;
   $('#bkBack').onclick = () => go('books');
   $('#bkEdit').onclick = () => editBook(id);
+  $('#bkCover').onclick = () => pickCover(id);
+  let nt2; $('#bkNoteMain').oninput = e => { clearTimeout(nt2); nt2 = setTimeout(() => updBook(id, bb => { bb.note = e.target.value; }), 700); };
+  $$('[data-wk]').forEach(x => x.onclick = () => { updBook(id, bb => { const w = bb.works.find(w => w.id === x.dataset.wk); w.done = !w.done;
+    if (bb.works.every(w => w.done) && bb.status !== 'done') { bb.status = 'done'; bb.finished = dkey(new Date()); toast('Весь том прочитан!'); }
+    else if (bb.status === 'want' && w.done) { bb.status = 'reading'; bb.started = bb.started || dkey(new Date()); } }); render(); });
+  loadCovers();
   $$('[data-st]').forEach(x => x.onclick = () => updBook(id, bb => { const st = x.dataset.st; bb.status = st;
     if (st === 'reading') bb.started = bb.started || dkey(new Date());
     if (st === 'done') { bb.finished = dkey(new Date()); if (bb.pages) bb.read = bb.pages; } else delete bb.finished; }) || render());
@@ -887,6 +971,7 @@ function editBook(id) {
     <label class="l">Автор</label><input id="ka" value="${esc(b.author || '')}">
     <label class="row chip" style="margin-top:14px;box-shadow:none;background:var(--card2)"><input type="checkbox" id="kown" style="width:auto" ${b.owned ? 'checked' : ''}><i class="ti ti-home"></i><span class="grow">Есть у меня дома</span></label>
     <label class="l">Почему хочу прочитать</label><textarea id="kn" style="min-height:70px" placeholder="Кто посоветовал, чем зацепила…">${esc(b.note || '')}</textarea>
+    <label class="l">Произведения в томе (если их несколько, каждое с новой строки)</label><textarea id="kw" style="min-height:60px" placeholder="Например: Белая гвардия&#10;Мастер и Маргарита">${esc((b.works || []).map(w => w.t).join('\n'))}</textarea>
     <label class="l">Страниц в книге</label><input id="kp" type="number" inputmode="numeric" value="${b.pages || ''}" placeholder="Например: 320">
     <label class="l">Тема</label><div class="chips" id="kc">${Object.entries(BOOK_CATS).map(([k, v]) => `<button type="button" class="chip ${k === b.cat ? 'on' : ''}" data-kc="${k}" style="border-color:${k === b.cat ? v.c : 'transparent'}"><span style="width:10px;height:10px;border-radius:50%;background:${v.c}"></span>${v.n}</button>`).join('')}</div>
     ${id ? '' : `<label class="l">Статус</label><div class="days" id="ks">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button type="button" data-ks="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:12px;padding:8px 4px">${n}</button>`).join('')}</div>`}
@@ -900,7 +985,8 @@ function editBook(id) {
       if (!$('#kt').value.trim()) return toast('Введите название');
       const nid = id || uid(), st = id ? b.status : (root.querySelector('[data-ks].on')?.dataset.ks || 'want');
       S.books[nid] = { ...(id ? S.books[id] : { read: 0, notes: [], log: [], added: dkey(new Date()) }), u: now(), title: $('#kt').value.trim(), author: $('#ka').value.trim(),
-        pages: +$('#kp').value || 0, owned: $('#kown').checked, note: $('#kn').value.trim(), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
+        pages: +$('#kp').value || 0, owned: $('#kown').checked, note: $('#kn').value.trim(),
+        works: $('#kw').value.split('\n').map(x => x.trim()).filter(Boolean).map(t => ((b.works || []).find(w => w.t === t)) || { id: uid(), t, done: false }), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
         ...(id ? {} : st === 'reading' ? { started: dkey(new Date()) } : st === 'done' ? { finished: dkey(new Date()) } : {}) };
       persist(); closeSheet(); if (!id) bookTab = st; if (VIEW === 'book' || VIEW === 'books') render(); else openBook(nid);
     };
