@@ -25,7 +25,7 @@ const CATS = {
 const DAYS = [['d1', 'Пн', 'Понедельник'], ['d2', 'Вт', 'Вторник'], ['d3', 'Ср', 'Среда'], ['d4', 'Чт', 'Четверг'],
   ['d5', 'Пт', 'Пятница'], ['d6', 'Сб', 'Суббота'], ['d7', 'Вс', 'Воскресенье']];
 const DAY_ACC = { d1: 'понедельники', d2: 'вторники', d3: 'среды', d4: 'четверги', d5: 'пятницы', d6: 'субботы', d7: 'воскресенья' };
-const COLLECTIONS = ['plan', 'days', 'habits', 'goals', 'reviews', 'weights'];
+const COLLECTIONS = ['plan', 'days', 'habits', 'goals', 'reviews', 'weights', 'books'];
 
 /* ---------- utils ---------- */
 const $ = s => document.querySelector(s);
@@ -146,7 +146,7 @@ function defaultGoals(t) {
       steps: ['4–5 тренировок в неделю по программе', 'Австралийские подтягивания на брусьях'] },
     { title: 'Грин-карта и Upwork', cat: 'growth', why: 'Переезд в США и своё дело.', metric: 'Обновлённый профиль Upwork + портфолио; план по грин-карте',
       steps: ['Обновить резюме и профиль Upwork', 'Собрать портфолио (3–5 проектов)', 'Разобраться в вариантах грин-карты и документах'] },
-  ].forEach((g, i) => { G[uid() + i] = { u: t, order: i, cat: g.cat, title: g.title, why: g.why, metric: g.metric,
+  ].forEach((g, i) => { G[['g-english', 'g-weight', 'g-strength', 'g-greencard'][i]] = { u: t, order: i, cat: g.cat, title: g.title, why: g.why, metric: g.metric,
     steps: g.steps.map(x => ({ id: uid(), t: x, done: false })) }; });
   return G;
 }
@@ -170,6 +170,19 @@ function migrate(s) {
     reviews: s.reviews || {}, weights: Object.keys(s.weights || {}).length ? s.weights : n.weights };
 }
 S = migrate(S);
+// Убрать дубли целей (раньше каждое устройство создавало свои копии стартовых целей)
+function dedupeGoals() {
+  const groups = {}; let changed = false;
+  live(S.goals).forEach(([id, g]) => { const key = (g.title || '').trim().toLowerCase(); (groups[key] = groups[key] || []).push([id, g]); });
+  Object.values(groups).forEach(list => {
+    if (list.length < 2) return;
+    const score = ([id, g]) => (g.steps || []).filter(x => x.done).length * 1e13 + (id.startsWith('g-') ? 1e12 : 0) + (g.u || 0);
+    list.sort((a, b) => score(b) - score(a));
+    list.slice(1).forEach(([id]) => { S.goals[id] = { u: now(), deleted: true }; changed = true; });
+  });
+  return changed;
+}
+dedupeGoals();
 try { CFG = JSON.parse(localStorage.getItem(LS_CFG)) || {}; } catch { CFG = {}; }
 CFG.owner = CFG.owner || 'SerhiiOrobchenko';
 if (!CFG.repo || CFG.repo === 'life-planner-data') CFG.repo = 'Life_Planner_Data';
@@ -287,6 +300,7 @@ async function sync(manual) {
       if (remote && (remote.v || 1) < VERSION) remote = { ...remote, v: VERSION,
         days: Object.fromEntries(Object.entries(remote.days || {}).filter(([, d]) => d && d.note).map(([k, d]) => [k, { u: d.u || 0, note: d.note, marks: {}, habits: {} }])) };
       const merged = remote ? merge(S, remote) : S;
+      { const keep = S; S = merged; dedupeGoals(); S = keep; }
       const body = JSON.stringify(merged);
       S = merged; persist(true);
       if (remote && JSON.stringify(remote) === body) break;
@@ -321,7 +335,7 @@ const habitOptions = sel => `<option value="">— не связан —</option>
 
 /* ---------- router ---------- */
 let VIEW = 'today', viewDate = new Date(), planDay = dayCode(new Date()), statWeek = 0, diaryQ = '';
-const TITLES = { today: 'Сегодня', plan: 'Неделя', stats: 'Статистика', goals: 'Цели', diary: 'Дневник', settings: 'Настройки' };
+const TITLES = { books: 'Книги', book: 'Книга', today: 'Сегодня', plan: 'Неделя', stats: 'Статистика', goals: 'Цели', diary: 'Дневник', settings: 'Настройки' };
 function go(v) {
   stopDictation(); VIEW = v; if (v === 'today') viewDate = new Date();
   $$('#nav button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
@@ -331,7 +345,7 @@ $('#nav').addEventListener('click', e => { const b = e.target.closest('button');
 $('#gear').onclick = () => go('settings');
 function render() {
   $('#title').textContent = TITLES[VIEW]; $('#sub').textContent = '';
-  ({ today: renderToday, plan: renderPlan, stats: renderStats, goals: renderGoals, diary: renderDiary, settings: renderSettings })[VIEW]();
+  ({ today: renderToday, plan: renderPlan, stats: renderStats, goals: renderGoals, books: renderBooks, book: renderBook, diary: renderDiary, settings: renderSettings })[VIEW]();
 }
 
 /* ---------- TODAY ---------- */
@@ -386,6 +400,7 @@ function renderToday() {
           <div class="ttl">${esc(b.title)}</div>
           <div class="meta"><span style="font-weight:700;color:var(--ink2)">${fmtShort(blockLen(b))}</span>${NATIVE && CFG.notif.on && blockNotify(b) ? ' <i class="ti ti-bell"></i>' : ''}${b.note ? ' <i class="ti ti-notes"></i>' : ''}${hn ? ` <span class="tag" style="background:color-mix(in srgb,${c.c} 13%,transparent);color:${c.c}"><i class="ti ti-repeat"></i>${esc(hn)}</span>` : ''}</div>
           ${b.note ? `<div class="note hidden" id="n-${b.id}">${esc(b.note)}</div>` : ''}
+          ${b.cat === 'reading' ? readingLine() : ''}
         </div>
         ${b.cat !== 'sleep' || b.h ? `<button class="chk ${mk ? 'on' : ''}" data-mark="${b.id}" aria-label="Отметить"><i class="ti ti-check"></i></button>` : '<span style="width:32px"></span>'}
       </div>`; }).join('')}
@@ -423,6 +438,7 @@ function renderToday() {
   $('#addBlock').onclick = () => editBlock('day', k, null);
   $('#toPlan').onclick = () => { planDay = dayCode(viewDate); go('plan'); };
   $('#toDiary').onclick = () => go('diary');
+  $$('[data-book]').forEach(el => el.onclick = e => { e.stopPropagation(); openBook(el.dataset.book); });
   const note = $('#dayNote'); let nt;
   note.oninput = () => { clearTimeout(nt); nt = setTimeout(() => setDay(k, x => { x.note = note.value; }), 600); };
   $('#micBtn').onclick = () => toggleDictation(note, $('#micBtn'), $('#micState'));
@@ -734,6 +750,148 @@ function downloadDiary(fmt) {
   } else blob = new Blob(['﻿' + diaryText(fmt)], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Дневник_${dkey(new Date())}.${ext}`;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/* ---------- BOOKS ---------- */
+const BOOK_CATS = {
+  psych:  { n: 'Психология',  c: '#7F77DD' }, parent: { n: 'Воспитание', c: '#E57A44' },
+  faith:  { n: 'Вера',        c: '#9B6BC4' }, fiction: { n: 'Художественная', c: '#14A3A3' },
+  prof:   { n: 'Профессия',   c: '#3D7BE0' }, english: { n: 'На английском', c: '#D4537E' },
+  self:   { n: 'Саморазвитие', c: '#1FA971' }, other: { n: 'Другое', c: '#8A93A0' },
+};
+const BOOK_ST = { reading: ['Читаю', 'ti-book-2'], want: ['Хочу прочитать', 'ti-bookmark'], done: ['Прочитано', 'ti-circle-check'], paused: ['Отложено', 'ti-player-pause'] };
+let bookTab = 'reading', curBook = null;
+const booksList = () => live(S.books);
+const bPct = b => b.pages ? Math.min(100, Math.round((b.read || 0) / b.pages * 100)) : (b.status === 'done' ? 100 : 0);
+function cover(b, w = 54) {
+  const c = (BOOK_CATS[b.cat] || BOOK_CATS.other).c, h = Math.round(w * 1.42);
+  const ini = (b.title || '?').split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
+  return `<div style="width:${w}px;height:${h}px;flex:none;border-radius:6px 10px 10px 6px;background:${c};color:#fff;position:relative;overflow:hidden;
+    box-shadow:inset 4px 0 0 rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.12);display:flex;align-items:flex-end;padding:6px">
+    <b style="font-size:${Math.round(w * .32)}px;line-height:1;letter-spacing:-.02em">${esc(ini)}</b>
+    <span style="position:absolute;top:6px;right:6px;width:${Math.round(w * .28)}px;height:${Math.round(w * .28)}px;border-radius:50%;background:rgba(255,255,255,.25)"></span></div>`;
+}
+function readingLine() {
+  const r = booksList().filter(([, b]) => b.status === 'reading');
+  if (!r.length) return `<div class="meta" style="margin-top:4px"><span class="link" data-book="new" style="padding:0">+ выбрать книгу</span></div>`;
+  return r.slice(0, 2).map(([id, b]) => `<div data-book="${id}" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--ink2);cursor:pointer">
+    <i class="ti ti-book-2"></i><span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.title)}</span>
+    <b>${b.pages ? `${b.read || 0}/${b.pages}` : bPct(b) + '%'}</b></div>`).join('');
+}
+function pagesInRange(from, to) {
+  let n = 0; booksList().forEach(([, b]) => { (b.log || []).forEach(l => { if (l.d >= from && l.d <= to) n += Math.max(0, l.delta || 0); }); }); return n;
+}
+function openBook(id) { if (id === 'new') return editBook(null); curBook = id; VIEW = 'book'; $$('#nav button').forEach(x => x.classList.toggle('on', x.dataset.v === 'books')); render(); window.scrollTo(0, 0); }
+function renderBooks() {
+  const all = booksList(), year = String(new Date().getFullYear());
+  const ws = weekStart(new Date()), weekPages = pagesInRange(dkey(ws), dkey(addDays(ws, 6)));
+  const doneYear = all.filter(([, b]) => b.status === 'done' && (b.finished || '').startsWith(year)).length;
+  const counts = Object.fromEntries(Object.keys(BOOK_ST).map(k => [k, all.filter(([, b]) => b.status === k).length]));
+  const list = all.filter(([, b]) => b.status === bookTab).sort((a, b) => (b[1].u || 0) - (a[1].u || 0));
+  $('#sub').textContent = `${all.length} книг в библиотеке`;
+  $('#view').innerHTML = `
+  <div class="metrics">
+    <div class="metric"><div class="v">${counts.reading}</div><div class="n">читаю сейчас</div></div>
+    <div class="metric"><div class="v">${weekPages}</div><div class="n">страниц за неделю</div></div>
+    <div class="metric"><div class="v">${doneYear}</div><div class="n">прочитано в ${year}</div></div>
+  </div>
+  <div class="days" style="margin-top:12px">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button data-bt="${k}" class="${k === bookTab ? 'on' : ''}" style="min-width:auto;padding:8px 6px;font-size:12px">${n}<small>${counts[k]}</small></button>`).join('')}</div>
+  ${list.map(([id, b]) => { const p = bPct(b), bc = (BOOK_CATS[b.cat] || BOOK_CATS.other);
+    return `<div class="card" data-bo="${id}" style="display:flex;gap:14px;cursor:pointer;align-items:center">
+      ${cover(b)}
+      <div class="grow">
+        <div style="font-weight:800;font-size:16px;line-height:1.25">${esc(b.title)}</div>
+        <div class="mute">${esc(b.author || '')}${b.author ? ' · ' : ''}<span style="color:${bc.c};font-weight:600">${bc.n}</span></div>
+        ${b.status === 'done' ? `<div style="margin-top:6px;color:var(--warn);letter-spacing:2px">${'★'.repeat(b.rating || 0)}<span style="color:var(--line)">${'★'.repeat(5 - (b.rating || 0))}</span></div>`
+          : `<div class="row" style="margin-top:8px"><div class="pbar grow" style="margin:0"><div style="width:${p}%;background:${bc.c}"></div></div><span class="mute" style="font-weight:700">${p}%</span></div>
+             <div class="mute" style="margin-top:3px">${b.pages ? `${b.read || 0} из ${b.pages} стр.` : 'страниц не указано'}${(b.notes || []).length ? ` · <i class="ti ti-notes"></i> ${(b.notes || []).length}` : ''}</div>`}
+      </div></div>`; }).join('') || `<div class="card mute" style="text-align:center;padding:26px">${bookTab === 'reading' ? 'Сейчас ничего не читаете. Добавьте книгу или начните одну из списка «Хочу прочитать».' : 'Здесь пока пусто.'}</div>`}
+  <button class="btn" id="badd" style="width:100%"><i class="ti ti-plus"></i> Добавить книгу</button>`;
+  $$('[data-bt]').forEach(b => b.onclick = () => { bookTab = b.dataset.bt; render(); });
+  $$('[data-bo]').forEach(b => b.onclick = () => openBook(b.dataset.bo));
+  $('#badd').onclick = () => editBook(null);
+}
+function updBook(id, fn) { const b = structuredClone(S.books[id]); fn(b); b.u = now(); S.books[id] = b; persist(); }
+function setPage(id, page) {
+  updBook(id, b => { page = Math.max(0, Math.round(page)); if (b.pages) page = Math.min(page, b.pages);
+    const delta = page - (b.read || 0); b.read = page; b.log = [...(b.log || []), { d: dkey(new Date()), p: page, delta }];
+    if (b.status === 'want' || b.status === 'paused') { b.status = 'reading'; b.started = b.started || dkey(new Date()); }
+    if (b.pages && page >= b.pages && b.status !== 'done') { b.status = 'done'; b.finished = dkey(new Date()); toast('Книга прочитана! Поставьте оценку и напишите отзыв'); } });
+  render();
+}
+function renderBook() {
+  const id = curBook, b = S.books[id];
+  if (!b || b.deleted) { go('books'); return; }
+  const bc = BOOK_CATS[b.cat] || BOOK_CATS.other, p = bPct(b);
+  $('#title').textContent = 'Книга'; $('#sub').textContent = BOOK_ST[b.status][0];
+  $('#view').innerHTML = `
+  <button class="link" id="bkBack" style="margin:0 0 10px -4px"><i class="ti ti-arrow-left"></i> Все книги</button>
+  <div class="card" style="display:flex;gap:16px;align-items:center">
+    ${cover(b, 84)}
+    <div class="grow"><div style="font-weight:800;font-size:19px;line-height:1.2">${esc(b.title)}</div>
+      <div class="mute" style="margin-top:3px">${esc(b.author || '')}</div>
+      <div style="margin-top:6px"><span class="tag" style="background:color-mix(in srgb,${bc.c} 14%,transparent);color:${bc.c}">${bc.n}</span></div>
+      ${b.started ? `<div class="mute" style="margin-top:6px;font-size:12px">Начал ${parseKey(b.started).toLocaleDateString('ru-RU')}${b.finished ? ' · закончил ' + parseKey(b.finished).toLocaleDateString('ru-RU') : ''}</div>` : ''}</div>
+    <button class="iconbtn" id="bkEdit" style="box-shadow:none;background:var(--card2)"><i class="ti ti-pencil"></i></button>
+  </div>
+  <div class="days">${Object.entries(BOOK_ST).map(([k, [n, i]]) => `<button data-st="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:11px;padding:8px 4px"><i class="ti ${i}" style="font-size:18px"></i><small>${n}</small></button>`).join('')}</div>
+  ${b.status !== 'want' ? `<div class="card">
+    <div class="row"><div class="ring" style="width:64px;height:64px">${ringSvg(p / 100, bc.c, 64, 7)}<b>${p}%</b></div>
+      <div class="grow"><div style="font-weight:800;font-size:18px">${b.read || 0}${b.pages ? ` <span class="mute" style="font-size:14px">из ${b.pages} стр.</span>` : ' стр.'}</div>
+      <div class="mute">${b.pages ? `осталось ${Math.max(0, b.pages - (b.read || 0))} стр.` : 'укажите число страниц в книге (✎)'}</div></div></div>
+    <label class="l">На какой я странице</label>
+    <div class="row"><input type="number" inputmode="numeric" id="bkPage" value="${b.read || 0}"><button class="btn" id="bkSave">OK</button></div>
+    <div class="row" style="margin-top:8px;gap:6px">${[5, 10, 20, 50].map(n => `<button class="btn2 grow" data-plus="${n}">+${n}</button>`).join('')}</div>
+  </div>` : ''}
+  ${b.status === 'done' ? `<div class="card"><b>Моя оценка</b><div style="font-size:30px;letter-spacing:4px;margin-top:4px">${[1, 2, 3, 4, 5].map(n => `<span data-rate="${n}" style="cursor:pointer;color:${n <= (b.rating || 0) ? 'var(--warn)' : 'var(--line)'}">★</span>`).join('')}</div>
+    <label class="l">Отзыв: что взял из книги</label><textarea id="bkReview" placeholder="Главные мысли, что применю в жизни…">${esc(b.review || '')}</textarea></div>` : ''}
+  <div class="sec"><h2>Мои заметки</h2><span class="mute">${(b.notes || []).length}</span></div>
+  <div class="card">
+    <textarea id="bkNote" placeholder="Мысль, цитата своими словами, вывод…" style="min-height:80px"></textarea>
+    <div class="row" style="margin-top:8px;gap:8px"><button class="btn2" id="bkMic"><i class="ti ti-microphone"></i> Надиктовать</button><span class="mute grow" id="bkMicSt"></span>
+      <button class="btn" id="bkAddNote">Сохранить</button></div>
+  </div>
+  ${[...(b.notes || [])].reverse().map(n => `<div class="card" style="padding:14px">
+      <div class="row"><span class="tag" style="background:var(--card2);color:var(--ink2)"><i class="ti ti-calendar"></i>${parseKey(n.d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}${n.page ? ` · стр. ${n.page}` : ''}</span>
+      <span class="grow"></span><button class="link" data-dn="${n.id}" style="color:var(--mute)"><i class="ti ti-trash"></i></button></div>
+      <div style="white-space:pre-wrap;margin-top:8px;line-height:1.6">${esc(n.t)}</div></div>`).join('')}`;
+  $('#bkBack').onclick = () => go('books');
+  $('#bkEdit').onclick = () => editBook(id);
+  $$('[data-st]').forEach(x => x.onclick = () => updBook(id, bb => { const st = x.dataset.st; bb.status = st;
+    if (st === 'reading') bb.started = bb.started || dkey(new Date());
+    if (st === 'done') { bb.finished = dkey(new Date()); if (bb.pages) bb.read = bb.pages; } else delete bb.finished; }) || render());
+  $('#bkSave') && ($('#bkSave').onclick = () => setPage(id, +$('#bkPage').value || 0));
+  $$('[data-plus]').forEach(x => x.onclick = () => setPage(id, (b.read || 0) + +x.dataset.plus));
+  $$('[data-rate]').forEach(x => x.onclick = () => { updBook(id, bb => { bb.rating = +x.dataset.rate; }); render(); });
+  $('#bkReview') && ($('#bkReview').onchange = e => updBook(id, bb => { bb.review = e.target.value; }));
+  $('#bkMic').onclick = () => toggleDictation($('#bkNote'), $('#bkMic'), $('#bkMicSt'));
+  $('#bkAddNote').onclick = () => { const t = $('#bkNote').value.trim(); if (!t) return toast('Напишите или надиктуйте заметку');
+    stopDictation(); updBook(id, bb => { bb.notes = [...(bb.notes || []), { id: uid(), d: dkey(new Date()), page: bb.read || 0, t }]; }); render(); toast('Заметка сохранена'); };
+  $$('[data-dn]').forEach(x => x.onclick = () => { updBook(id, bb => { bb.notes = (bb.notes || []).filter(n => n.id !== x.dataset.dn); }); render(); });
+}
+function editBook(id) {
+  const b = id ? S.books[id] : { title: '', author: '', pages: '', cat: 'psych', status: 'want' };
+  openSheet(`<h3>${id ? 'Изменить книгу' : 'Новая книга'}</h3>
+    <label class="l">Название</label><input id="kt" value="${esc(b.title)}" placeholder="Название книги">
+    <label class="l">Автор</label><input id="ka" value="${esc(b.author || '')}">
+    <label class="l">Страниц в книге</label><input id="kp" type="number" inputmode="numeric" value="${b.pages || ''}" placeholder="Например: 320">
+    <label class="l">Тема</label><div class="chips" id="kc">${Object.entries(BOOK_CATS).map(([k, v]) => `<button type="button" class="chip ${k === b.cat ? 'on' : ''}" data-kc="${k}" style="border-color:${k === b.cat ? v.c : 'transparent'}"><span style="width:10px;height:10px;border-radius:50%;background:${v.c}"></span>${v.n}</button>`).join('')}</div>
+    ${id ? '' : `<label class="l">Статус</label><div class="days" id="ks">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button type="button" data-ks="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:12px;padding:8px 4px">${n}</button>`).join('')}</div>`}
+    <div class="row" style="margin-top:16px">${id ? '<button class="btn2 danger" id="kdel"><i class="ti ti-trash"></i> Удалить</button>' : ''}<span class="grow"></span>
+    <button class="btn2" id="kx">Отмена</button><button class="btn" id="kok">Сохранить</button></div>`, root => {
+    root.querySelectorAll('[data-kc]').forEach(x => x.onclick = () => root.querySelectorAll('[data-kc]').forEach(y => { const on = y === x; y.classList.toggle('on', on); y.style.borderColor = on ? BOOK_CATS[y.dataset.kc].c : 'transparent'; }));
+    root.querySelectorAll('[data-ks]').forEach(x => x.onclick = () => root.querySelectorAll('[data-ks]').forEach(y => y.classList.toggle('on', y === x)));
+    $('#kx').onclick = closeSheet;
+    $('#kdel') && ($('#kdel').onclick = () => { S.books[id] = { u: now(), deleted: true }; persist(); closeSheet(); go('books'); });
+    $('#kok').onclick = () => {
+      if (!$('#kt').value.trim()) return toast('Введите название');
+      const nid = id || uid(), st = id ? b.status : (root.querySelector('[data-ks].on')?.dataset.ks || 'want');
+      S.books[nid] = { ...(id ? S.books[id] : { read: 0, notes: [], log: [], added: dkey(new Date()) }), u: now(), title: $('#kt').value.trim(), author: $('#ka').value.trim(),
+        pages: +$('#kp').value || 0, cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
+        ...(id ? {} : st === 'reading' ? { started: dkey(new Date()) } : st === 'done' ? { finished: dkey(new Date()) } : {}) };
+      persist(); closeSheet(); if (!id) bookTab = st; if (VIEW === 'book' || VIEW === 'books') render(); else openBook(nid);
+    };
+  });
 }
 
 /* ---------- SETTINGS ---------- */

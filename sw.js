@@ -1,6 +1,6 @@
 // Service worker: приложение работает без интернета. VERSION меняется при каждом обновлении.
-const VERSION = 'v5';
-const SHELL = ['./', './index.html', './app.js', './app.js?v=5', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
+const VERSION = 'v6';
+const SHELL = ['./', './index.html', './app.js', './app.js?v=6', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 const CDN = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net', 'cdnjs.cloudflare.com'];
 
 self.addEventListener('install', e => {
