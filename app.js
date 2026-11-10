@@ -25,7 +25,7 @@ const CATS = {
 const DAYS = [['d1', 'Пн', 'Понедельник'], ['d2', 'Вт', 'Вторник'], ['d3', 'Ср', 'Среда'], ['d4', 'Чт', 'Четверг'],
   ['d5', 'Пт', 'Пятница'], ['d6', 'Сб', 'Суббота'], ['d7', 'Вс', 'Воскресенье']];
 const DAY_ACC = { d1: 'понедельники', d2: 'вторники', d3: 'среды', d4: 'четверги', d5: 'пятницы', d6: 'субботы', d7: 'воскресенья' };
-const COLLECTIONS = ['plan', 'days', 'habits', 'goals', 'reviews', 'weights', 'books'];
+const COLLECTIONS = ['plan', 'days', 'habits', 'goals', 'reviews', 'weights', 'books', 'themes'];
 
 /* ---------- utils ---------- */
 const $ = s => document.querySelector(s);
@@ -183,6 +183,7 @@ function dedupeGoals() {
   return changed;
 }
 dedupeGoals();
+S.themes = S.themes || {};
 try { CFG = JSON.parse(localStorage.getItem(LS_CFG)) || {}; } catch { CFG = {}; }
 CFG.owner = CFG.owner || 'SerhiiOrobchenko';
 if (!CFG.repo || CFG.repo === 'life-planner-data') CFG.repo = 'Life_Planner_Data';
@@ -337,7 +338,7 @@ const habitOptions = sel => `<option value="">— не связан —</option>
 
 /* ---------- router ---------- */
 let VIEW = 'today', viewDate = new Date(), planDay = dayCode(new Date()), statWeek = 0, diaryQ = '';
-const TITLES = { books: 'Книги', book: 'Книга', today: 'Сегодня', plan: 'Неделя', stats: 'Статистика', goals: 'Цели', diary: 'Дневник', settings: 'Настройки' };
+const TITLES = { books: 'Книги', book: 'Книга', work: 'Произведение', today: 'Сегодня', plan: 'Неделя', stats: 'Статистика', goals: 'Цели', diary: 'Дневник', settings: 'Настройки' };
 function go(v) {
   stopDictation(); VIEW = v; if (v === 'today') viewDate = new Date();
   $$('#nav button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
@@ -346,8 +347,9 @@ function go(v) {
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#gear').onclick = () => go('settings');
 function render() {
+  refreshThemes();
   $('#title').textContent = TITLES[VIEW]; $('#sub').textContent = '';
-  ({ today: renderToday, plan: renderPlan, stats: renderStats, goals: renderGoals, books: renderBooks, book: renderBook, diary: renderDiary, settings: renderSettings })[VIEW]();
+  ({ today: renderToday, plan: renderPlan, stats: renderStats, goals: renderGoals, books: renderBooks, book: renderBook, work: renderWork, diary: renderDiary, settings: renderSettings })[VIEW]();
 }
 
 /* ---------- TODAY ---------- */
@@ -755,17 +757,51 @@ function downloadDiary(fmt) {
 }
 
 /* ---------- BOOKS ---------- */
-const BOOK_CATS = {
+const DEFAULT_THEMES = {
   psych:  { n: 'Психология',  c: '#7F77DD' }, parent: { n: 'Воспитание', c: '#E57A44' },
   faith:  { n: 'Вера',        c: '#9B6BC4' }, fiction: { n: 'Художественная', c: '#14A3A3' },
   prof:   { n: 'Профессия',   c: '#3D7BE0' }, english: { n: 'На английском', c: '#D4537E' },
   self:   { n: 'Саморазвитие', c: '#1FA971' }, philo: { n: 'Философия', c: '#5B6B8C' },
   history: { n: 'История и политика', c: '#B5653A' }, money: { n: 'Деньги и бизнес', c: '#C08A1E' }, other: { n: 'Другое', c: '#8A93A0' },
 };
+const THEME_COLORS = ['#7F77DD', '#9B6BC4', '#D4537E', '#E5484D', '#E57A44', '#C08A1E', '#B5653A', '#1FA971', '#14A3A3', '#3D7BE0', '#5B6B8C', '#8A93A0'];
+let BOOK_CATS = { ...DEFAULT_THEMES };
+function refreshThemes() {
+  S.themes = S.themes || {};
+  if (!Object.keys(S.themes).length) Object.entries(DEFAULT_THEMES).forEach(([k, v], i) => { S.themes[k] = { u: 1, n: v.n, c: v.c, order: i }; });
+  BOOK_CATS = Object.fromEntries(live(S.themes).sort((a, b) => (a[1].order ?? 0) - (b[1].order ?? 0)).map(([k, v]) => [k, { n: v.n, c: v.c }]));
+  if (!BOOK_CATS.other) BOOK_CATS.other = { n: 'Без темы', c: '#8A93A0' };
+}
+function manageThemes(after) {
+  refreshThemes();
+  openSheet(`<h3>Темы книг</h3><div class="mute">Нажмите на цвет, чтобы поменять. Книги удалённой темы попадут в «Другое».</div>
+    <div id="thList" style="margin-top:12px">${Object.entries(BOOK_CATS).filter(([k]) => S.themes[k]).map(([k, v]) => `
+      <div class="row" style="margin-bottom:8px"><button type="button" data-thc="${k}" style="width:34px;height:34px;border-radius:10px;border:0;background:${v.c};flex:none"></button>
+        <input value="${esc(v.n)}" data-thn="${k}"><button class="btn2 danger" data-thd="${k}" aria-label="Удалить"><i class="ti ti-trash"></i></button></div>
+      <div class="chips hidden" id="pal-${k}" style="margin:0 0 10px 42px">${THEME_COLORS.map(c => `<button type="button" data-pc="${k}|${c}" style="width:28px;height:28px;border-radius:8px;border:0;background:${c}"></button>`).join('')}</div>`).join('')}</div>
+    <label class="l">Новая тема</label><div class="row"><input id="thNew" placeholder="Например: Архитектура"><button class="btn" id="thAdd"><i class="ti ti-plus"></i></button></div>
+    <div class="row" style="margin-top:16px"><span class="grow"></span><button class="btn" id="thOk">Готово</button></div>`, root => {
+    const save = (k, patch) => { S.themes[k] = { ...S.themes[k], ...patch, u: now() }; persist(); refreshThemes(); };
+    root.querySelectorAll('[data-thc]').forEach(b => b.onclick = () => $('#pal-' + b.dataset.thc).classList.toggle('hidden'));
+    root.querySelectorAll('[data-pc]').forEach(b => b.onclick = () => { const [k, c] = b.dataset.pc.split('|'); save(k, { c }); manageThemes(after); });
+    root.querySelectorAll('[data-thn]').forEach(i => i.onchange = () => i.value.trim() && save(i.dataset.thn, { n: i.value.trim() }));
+    root.querySelectorAll('[data-thd]').forEach(b => b.onclick = () => { const k = b.dataset.thd; S.themes[k] = { u: now(), deleted: true };
+      booksList().forEach(([id, bk]) => { if (bk.cat === k) S.books[id] = { ...bk, cat: 'other', u: now() }; });
+      if (k === 'other') S.themes.other = { u: now(), n: 'Другое', c: '#8A93A0', order: 99 };
+      persist(); refreshThemes(); manageThemes(after); });
+    $('#thAdd').onclick = () => { const n = $('#thNew').value.trim(); if (!n) return toast('Введите название темы');
+      const used = new Set(Object.values(BOOK_CATS).map(x => x.c)), c = THEME_COLORS.find(x => !used.has(x)) || THEME_COLORS[0];
+      S.themes['t-' + uid()] = { u: now(), n, c, order: Object.keys(S.themes).length }; persist(); refreshThemes(); manageThemes(after); };
+    $('#thOk').onclick = () => { closeSheet(); after ? after() : render(); };
+  });
+}
 const BOOK_ST = { reading: ['Читаю', 'ti-book-2'], want: ['Хочу прочитать', 'ti-bookmark'], done: ['Прочитано', 'ti-circle-check'], paused: ['Отложено', 'ti-player-pause'] };
 let bookTab = 'reading', curBook = null, ownFilter = 'all', bookQ = '', bookCatF = 'all', bookSort = 'title';
 const booksList = () => live(S.books);
-const bPct = b => b.pages ? Math.min(100, Math.round((b.read || 0) / b.pages * 100)) : (b.status === 'done' ? 100 : 0);
+const bPages = b => b.pages || Math.max(0, ...(b.works || []).map(w => +w.to || 0));
+const wPct = (b, w) => { const r = b.read || 0; if (w.done) return 100; if (!w.from || !w.to) return 0; if (r >= w.to) return 100; if (r < w.from) return 0; return Math.round((r - w.from + 1) / (w.to - w.from + 1) * 100); };
+const curWork = b => (b.works || []).find(w => w.from && w.to && (b.read || 0) >= w.from && (b.read || 0) <= w.to);
+const bPct = b => bPages(b) ? Math.min(100, Math.round((b.read || 0) / bPages(b) * 100)) : (b.status === 'done' ? 100 : 0);
 const coverURL = {};
 function cover(b, w = 54, id = '') {
   const c = (BOOK_CATS[b.cat] || BOOK_CATS.other).c, h = Math.round(w * 1.42);
@@ -782,7 +818,7 @@ function readingLine() {
   if (!r.length) return `<div class="meta" style="margin-top:4px"><span class="link" data-book="new" style="padding:0">+ выбрать книгу</span></div>`;
   return r.slice(0, 2).map(([id, b]) => `<div data-book="${id}" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--ink2);cursor:pointer">
     <i class="ti ti-book-2"></i><span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.title)}</span>
-    <b>${b.pages ? `${b.read || 0}/${b.pages}` : bPct(b) + '%'}</b></div>`).join('');
+    <b>${bPages(b) ? `${b.read || 0}/${bPages(b)}` : bPct(b) + "%"}</b></div>`).join('');
 }
 function pagesInRange(from, to) {
   let n = 0; booksList().forEach(([, b]) => { (b.log || []).forEach(l => { if (l.d >= from && l.d <= to) n += Math.max(0, l.delta || 0); }); }); return n;
@@ -843,7 +879,7 @@ function renderBooks() {
   const doneYear = all.filter(([, b]) => b.status === 'done' && (b.finished || '').startsWith(year)).length;
   const counts = Object.fromEntries(Object.keys(BOOK_ST).map(k => [k, all.filter(([, b]) => b.status === k).length]));
   const q = bookQ.trim().toLowerCase();
-  const hay = b => [b.title, b.author, b.note, ...(b.works || []).map(w => w.t)].join(' ').toLowerCase();
+  const hay = b => [b.title, b.author, b.note, b.publisher, b.series, b.volume, ...(b.works || []).map(w => w.t)].join(' ').toLowerCase();
   const shelf = all.filter(([, b]) => q ? hay(b).includes(q) : b.status === bookTab && (bookTab !== 'want' || ownFilter === 'all' || (ownFilter === 'home') === !!b.owned));
   const catCounts = {}; shelf.forEach(([, b]) => { catCounts[b.cat] = (catCounts[b.cat] || 0) + 1; });
   if (bookCatF !== 'all' && !catCounts[bookCatF]) bookCatF = 'all';
@@ -868,7 +904,7 @@ function renderBooks() {
   ${q ? `<div class="mute" style="margin:10px 2px">Найдено во всех полках: ${shelf.length}</div>` : `<div class="days" style="margin-top:12px">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button data-bt="${k}" class="${k === bookTab ? 'on' : ''}" style="min-width:auto;padding:8px 6px;font-size:12px">${n}<small>${counts[k]}</small></button>`).join('')}</div>`}
   ${!q && bookTab === 'want' ? `<div class="chips" style="margin-bottom:12px">${[['all', 'Все', counts.want], ['home', 'Есть дома', ownCnt], ['buy', 'Купить', buyCnt]].map(([k, n, c]) =>
       `<button class="chip ${ownFilter === k ? 'on' : ''}" data-of="${k}">${n} · ${c}</button>`).join('')}</div>` : ''}
-  ${Object.keys(catCounts).length > 1 ? `<div class="days" style="padding-bottom:12px;flex-wrap:wrap;overflow:visible">${[['all', 'Все темы', shelf.length], ...Object.entries(BOOK_CATS).filter(([k]) => catCounts[k]).map(([k, v]) => [k, v.n, catCounts[k]])].map(([k, n, c]) =>
+  ${Object.keys(catCounts).length > 1 ? `<div class="days" style="padding-bottom:12px;flex-wrap:wrap;overflow:visible"><button id="thEdit" style="flex:0 0 auto;min-width:auto;padding:7px 10px;font-size:12px"><i class="ti ti-settings"></i> Темы</button>${[['all', 'Все темы', shelf.length], ...Object.entries(BOOK_CATS).filter(([k]) => catCounts[k]).map(([k, v]) => [k, v.n, catCounts[k]])].map(([k, n, c]) =>
       `<button data-cf="${k}" class="${bookCatF === k ? 'on' : ''}" style="flex:0 0 auto;min-width:auto;padding:7px 12px;font-size:12px;white-space:nowrap">${k !== 'all' ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${BOOK_CATS[k].c};margin-right:5px"></span>` : ''}${n} · ${c}</button>`).join('')}</div>` : ''}
   ${list.map(([id, b]) => { const p = bPct(b), bc = (BOOK_CATS[b.cat] || BOOK_CATS.other);
     return `<div class="card" data-bo="${id}" style="display:flex;gap:14px;cursor:pointer;align-items:center">
@@ -882,12 +918,13 @@ function renderBooks() {
         ${b.status === 'want' && b.note ? `<div class="mute" style="margin-top:4px;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(b.note)}</div>` : ''}
         ${b.status === 'want' ? '' : b.status === 'done' ? `<div style="margin-top:6px;color:var(--warn);letter-spacing:2px">${'★'.repeat(b.rating || 0)}<span style="color:var(--line)">${'★'.repeat(5 - (b.rating || 0))}</span></div>`
           : `<div class="row" style="margin-top:8px"><div class="pbar grow" style="margin:0"><div style="width:${p}%;background:${bc.c}"></div></div><span class="mute" style="font-weight:700">${p}%</span></div>
-             <div class="mute" style="margin-top:3px">${b.pages ? `${b.read || 0} из ${b.pages} стр.` : 'страниц не указано'}${(b.notes || []).length ? ` · <i class="ti ti-notes"></i> ${(b.notes || []).length}` : ''}</div>`}
+             <div class="mute" style="margin-top:3px">${bPages(b) ? `${b.read || 0} из ${bPages(b)} стр.` : 'страниц не указано'}${curWork(b) ? ' · ' + esc(curWork(b).t) : ''}${(b.notes || []).length ? ` · <i class="ti ti-notes"></i> ${(b.notes || []).length}` : ''}</div>`}
       </div></div>`; }).join('') || `<div class="card mute" style="text-align:center;padding:26px">${bookTab === 'reading' ? 'Сейчас ничего не читаете. Добавьте книгу или начните одну из списка «Хочу прочитать».' : 'Здесь пока пусто.'}</div>`}
   <button class="btn" id="badd" style="width:100%"><i class="ti ti-plus"></i> Добавить книгу</button>`;
   $$('[data-bt]').forEach(b => b.onclick = () => { bookTab = b.dataset.bt; render(); });
   $$('[data-of]').forEach(b => b.onclick = () => { ownFilter = b.dataset.of; render(); });
   $$('[data-cf]').forEach(b => b.onclick = () => { bookCatF = b.dataset.cf; render(); });
+  $('#thEdit') && ($('#thEdit').onclick = () => manageThemes());
   $('#bkSort').onchange = e => { bookSort = e.target.value; render(); };
   const qi = $('#bkQ'); qi.oninput = () => { bookQ = qi.value; const pos = qi.selectionStart; render(); const n = $('#bkQ'); n.focus(); n.setSelectionRange(pos, pos); };
   loadCovers();
@@ -896,10 +933,11 @@ function renderBooks() {
 }
 function updBook(id, fn) { const b = structuredClone(S.books[id]); fn(b); b.u = now(); S.books[id] = b; persist(); }
 function setPage(id, page) {
-  updBook(id, b => { page = Math.max(0, Math.round(page)); if (b.pages) page = Math.min(page, b.pages);
+  updBook(id, b => { page = Math.max(0, Math.round(page)); if (bPages(b)) page = Math.min(page, bPages(b));
     const delta = page - (b.read || 0); b.read = page; b.log = [...(b.log || []), { d: dkey(new Date()), p: page, delta }];
     if (b.status === 'want' || b.status === 'paused') { b.status = 'reading'; b.started = b.started || dkey(new Date()); }
-    if (b.pages && page >= b.pages && b.status !== 'done') { b.status = 'done'; b.finished = dkey(new Date()); toast('Книга прочитана! Поставьте оценку и напишите отзыв'); } });
+    (b.works || []).forEach(w => { if (w.to && page >= w.to) w.done = true; });
+    if (bPages(b) && page >= bPages(b) && b.status !== 'done') { b.status = 'done'; b.finished = dkey(new Date()); toast('Книга прочитана! Поставьте оценку и напишите отзыв'); } });
   render();
 }
 function renderBook() {
@@ -923,13 +961,26 @@ function renderBook() {
     <textarea id="bkNoteMain" style="margin-top:8px;min-height:64px" placeholder="Кто посоветовал, чем зацепила, издательство, перевод…">${esc(b.note || '')}</textarea>
     ${(b.note || '').match(/https?:\/\/\S+/g) ? `<div style="margin-top:6px">${(b.note.match(/https?:\/\/\S+/g)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;font-size:13px"><i class="ti ti-external-link"></i> открыть ссылку</a>`).join(' ')}</div>` : ''}
   </div>
-  ${(b.works || []).length ? `<div class="card" style="padding:14px"><div class="row"><i class="ti ti-stack-2" style="color:var(--accent)"></i><b class="grow">В этом томе</b><span class="mute">${b.works.filter(w => w.done).length} из ${b.works.length} прочитано</span></div>
-    ${b.works.map(w => `<div class="step ${w.done ? 'done' : ''}"><button class="chk ${w.done ? 'on' : ''}" data-wk="${w.id}"><i class="ti ti-check"></i></button><span>${esc(w.t)}</span></div>`).join('')}</div>` : ''}
+  ${edInfo(b) ? `<div class="card" style="padding:14px"><div class="row"><i class="ti ti-info-circle" style="color:var(--accent)"></i><b class="grow">Об издании</b></div>
+    <div style="margin-top:6px;font-size:14px;line-height:1.7">${edInfo(b)}</div></div>` : ''}
+  ${(() => { const ws = b.works || [], cw = curWork(b), doneN = ws.filter(w => wPct(b, w) >= 100).length;
+    return `<div class="card" style="padding:14px"><div class="row"><i class="ti ti-stack-2" style="color:var(--accent)"></i><b class="grow">Произведения в томе</b>${ws.length ? `<span class="mute">${doneN} из ${ws.length}</span>` : ''}</div>
+    ${ws.length ? '' : '<div class="mute" style="margin-top:4px">Если в книге несколько произведений (сборник, том собрания сочинений) — добавьте их со страницами, и прогресс будет считаться по каждому.</div>'}
+    ${ws.map(w => { const wp = wPct(b, w), isCur = cw === w;
+      return `<div class="row" style="padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer" data-wo="${w.id}">
+        <button class="chk ${wp >= 100 ? 'on' : ''}" data-wk="${w.id}" style="width:26px;height:26px;font-size:13px"><i class="ti ti-check"></i></button>
+        <div class="grow"><div style="font-weight:700;${wp >= 100 ? 'color:var(--mute)' : ''}">${esc(w.t)}${isCur ? ' <span class="tag" style="background:var(--accent-soft);color:var(--accent)">читаю</span>' : ''}</div>
+          <div class="row" style="gap:8px;margin-top:3px"><span class="mute" style="font-size:12px;white-space:nowrap">${w.from && w.to ? `с. ${w.from}–${w.to}` : 'страницы не указаны'}</span>
+          ${w.from && w.to ? `<div class="pbar grow" style="margin:0;height:5px"><div style="width:${wp}%;background:${bc.c}"></div></div><span class="mute" style="font-size:12px;font-weight:700">${wp}%</span>` : ''}
+          ${(w.notes || []).length || w.review ? `<span class="mute" style="font-size:12px"><i class="ti ti-notes"></i> ${(w.notes || []).length + (w.review ? 1 : 0)}</span>` : ''}</div></div>
+        <i class="ti ti-chevron-right" style="color:var(--mute)"></i></div>`; }).join('')}
+    <button class="btn2 acc" id="wkAdd" style="margin-top:10px"><i class="ti ti-plus"></i> Добавить произведение</button></div>`; })()}
   <div class="days">${Object.entries(BOOK_ST).map(([k, [n, i]]) => `<button data-st="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:11px;padding:8px 4px"><i class="ti ${i}" style="font-size:18px"></i><small>${n}</small></button>`).join('')}</div>
   ${b.status !== 'want' ? `<div class="card">
     <div class="row"><div class="ring" style="width:64px;height:64px">${ringSvg(p / 100, bc.c, 64, 7)}<b>${p}%</b></div>
-      <div class="grow"><div style="font-weight:800;font-size:18px">${b.read || 0}${b.pages ? ` <span class="mute" style="font-size:14px">из ${b.pages} стр.</span>` : ' стр.'}</div>
-      <div class="mute">${b.pages ? `осталось ${Math.max(0, b.pages - (b.read || 0))} стр.` : 'укажите число страниц в книге (✎)'}</div></div></div>
+      <div class="grow"><div style="font-weight:800;font-size:18px">${b.read || 0}${bPages(b) ? ` <span class="mute" style="font-size:14px">из ${bPages(b)} стр.</span>` : ' стр.'}</div>
+      <div class="mute">${bPages(b) ? `осталось ${Math.max(0, bPages(b) - (b.read || 0))} стр.` : 'укажите число страниц в книге (✎)'}</div>
+      ${curWork(b) ? `<div style="margin-top:4px;font-size:13px;font-weight:700;color:var(--accent)"><i class="ti ti-book-2"></i> ${esc(curWork(b).t)} · ${wPct(b, curWork(b))}%</div>` : ''}</div></div>
     <label class="l">На какой я странице</label>
     <div class="row"><input type="number" inputmode="numeric" id="bkPage" value="${b.read || 0}"><button class="btn" id="bkSave">OK</button></div>
     <div class="row" style="margin-top:8px;gap:6px">${[5, 10, 20, 50].map(n => `<button class="btn2 grow" data-plus="${n}">+${n}</button>`).join('')}</div>
@@ -950,7 +1001,9 @@ function renderBook() {
   $('#bkEdit').onclick = () => editBook(id);
   $('#bkCover').onclick = () => pickCover(id);
   let nt2; $('#bkNoteMain').oninput = e => { clearTimeout(nt2); nt2 = setTimeout(() => updBook(id, bb => { bb.note = e.target.value; }), 700); };
-  $$('[data-wk]').forEach(x => x.onclick = () => { updBook(id, bb => { const w = bb.works.find(w => w.id === x.dataset.wk); w.done = !w.done;
+  $$('[data-wo]').forEach(x => x.onclick = () => { curWorkId = x.dataset.wo; VIEW = 'work'; render(); window.scrollTo(0, 0); });
+  $('#wkAdd').onclick = () => editWork(id, null);
+  $$('[data-wk]').forEach(x => x.onclick = e => { e.stopPropagation(); updBook(id, bb => { const w = bb.works.find(w => w.id === x.dataset.wk); w.done = !(wPct(bb, w) >= 100);
     if (bb.works.every(w => w.done) && bb.status !== 'done') { bb.status = 'done'; bb.finished = dkey(new Date()); toast('Весь том прочитан!'); }
     else if (bb.status === 'want' && w.done) { bb.status = 'reading'; bb.started = bb.started || dkey(new Date()); } }); render(); });
   loadCovers();
@@ -966,6 +1019,69 @@ function renderBook() {
     stopDictation(); updBook(id, bb => { bb.notes = [...(bb.notes || []), { id: uid(), d: dkey(new Date()), page: bb.read || 0, t }]; }); render(); toast('Заметка сохранена'); };
   $$('[data-dn]').forEach(x => x.onclick = () => { updBook(id, bb => { bb.notes = (bb.notes || []).filter(n => n.id !== x.dataset.dn); }); render(); });
 }
+let curWorkId = null;
+function edInfo(b) {
+  const parts = [['Издательство', b.publisher], ['Город', b.city], ['Год', b.year], ['Серия', [b.series, b.seriesNo ? 'том ' + b.seriesNo : ''].filter(Boolean).join(', ')],
+    ['Том собрания', b.volume], ['Перевод', b.translator], ['ISBN', b.isbn]].filter(([, v]) => v);
+  return parts.map(([k, v]) => `<span class="mute">${k}:</span> ${esc(v)}`).join('<br>');
+}
+function editWork(bid, wid) {
+  const b = S.books[bid], w = wid ? b.works.find(x => x.id === wid) : { t: '', from: '', to: '' };
+  const lastTo = Math.max(0, ...(b.works || []).map(x => +x.to || 0));
+  openSheet(`<h3>${wid ? 'Произведение' : 'Новое произведение'}</h3><div class="mute">${esc(b.title)}</div>
+    <label class="l">Название</label><input id="wt" value="${esc(w.t)}" placeholder="Например: Федон">
+    <div class="row"><div class="grow"><label class="l">С какой страницы</label><input id="wf" type="number" inputmode="numeric" value="${w.from || (wid ? '' : (lastTo ? lastTo + 1 : ''))}"></div>
+    <div class="grow"><label class="l">По какую</label><input id="wtto" type="number" inputmode="numeric" value="${w.to || ''}"></div></div>
+    <div class="row" style="margin-top:16px">${wid ? '<button class="btn2 danger" id="wdel"><i class="ti ti-trash"></i> Удалить</button>' : ''}<span class="grow"></span>
+    <button class="btn2" id="wx">Отмена</button><button class="btn" id="wok">Сохранить</button></div>`, () => {
+    $('#wx').onclick = closeSheet;
+    $('#wdel') && ($('#wdel').onclick = () => { updBook(bid, bb => { bb.works = bb.works.filter(x => x.id !== wid); }); closeSheet(); VIEW = 'book'; render(); });
+    $('#wok').onclick = () => {
+      const t = $('#wt').value.trim(); if (!t) return toast('Введите название');
+      const from = +$('#wf').value || 0, to = +$('#wtto').value || 0; if (from && to && to < from) return toast('Конечная страница меньше начальной');
+      updBook(bid, bb => { bb.works = bb.works || [];
+        if (wid) bb.works = bb.works.map(x => x.id === wid ? { ...x, t, from, to } : x);
+        else bb.works.push({ id: uid(), t, from, to, done: false, notes: [] });
+        bb.works.sort((a, c) => (a.from || 1e9) - (c.from || 1e9)); });
+      closeSheet(); render();
+    };
+  });
+}
+function renderWork() {
+  const b = S.books[curBook], w = b && (b.works || []).find(x => x.id === curWorkId);
+  if (!w) { VIEW = 'book'; return render(); }
+  const bc = BOOK_CATS[b.cat] || BOOK_CATS.other, wp = wPct(b, w), len = w.from && w.to ? w.to - w.from + 1 : 0;
+  const readIn = len ? Math.max(0, Math.min(len, (b.read || 0) - w.from + 1)) : 0;
+  $('#title').textContent = w.t; $('#sub').textContent = b.title;
+  $('#view').innerHTML = `
+  <button class="link" id="woBack" style="margin:0 0 10px -4px"><i class="ti ti-arrow-left"></i> ${esc(b.title)}</button>
+  <div class="card"><div class="row"><div class="ring" style="width:64px;height:64px">${ringSvg(wp / 100, bc.c, 64, 7)}<b>${wp}%</b></div>
+    <div class="grow"><div style="font-weight:800;font-size:18px">${esc(w.t)}</div>
+      <div class="mute">${len ? `страницы ${w.from}–${w.to} · ${len} стр.` : 'страницы не указаны'}</div>
+      ${len ? `<div class="mute">прочитано ${readIn} из ${len} стр.</div>` : ''}</div>
+    <button class="iconbtn" id="woEdit" style="box-shadow:none;background:var(--card2)"><i class="ti ti-pencil"></i></button></div>
+    ${len ? `<label class="l">На какой я странице тома</label><div class="row"><input type="number" inputmode="numeric" id="woPage" value="${b.read || 0}"><button class="btn" id="woSave">OK</button></div>` : ''}
+    <button class="btn2 ${wp >= 100 ? 'acc' : ''}" id="woDone" style="margin-top:10px"><i class="ti ti-circle-check"></i> ${wp >= 100 ? 'Прочитано' : 'Отметить прочитанным'}</button>
+  </div>
+  <div class="card"><b>Оценка</b><div style="font-size:28px;letter-spacing:4px;margin-top:2px">${[1, 2, 3, 4, 5].map(n => `<span data-wr="${n}" style="cursor:pointer;color:${n <= (w.rating || 0) ? 'var(--warn)' : 'var(--line)'}">★</span>`).join('')}</div>
+    <label class="l">Отзыв о произведении</label><textarea id="woReview" placeholder="О чём это, что взял для себя…">${esc(w.review || '')}</textarea></div>
+  <div class="sec"><h2>Заметки</h2><span class="mute">${(w.notes || []).length}</span></div>
+  <div class="card"><textarea id="woNote" placeholder="Мысль, цитата своими словами…" style="min-height:80px"></textarea>
+    <div class="row" style="margin-top:8px;gap:8px"><button class="btn2" id="woMic"><i class="ti ti-microphone"></i> Надиктовать</button><span class="mute grow" id="woMicSt"></span><button class="btn" id="woAdd">Сохранить</button></div></div>
+  ${[...(w.notes || [])].reverse().map(n => `<div class="card" style="padding:14px"><div class="row"><span class="tag" style="background:var(--card2);color:var(--ink2)"><i class="ti ti-calendar"></i>${parseKey(n.d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}${n.page ? ` · стр. ${n.page}` : ''}</span>
+    <span class="grow"></span><button class="link" data-wdn="${n.id}" style="color:var(--mute)"><i class="ti ti-trash"></i></button></div><div style="white-space:pre-wrap;margin-top:8px;line-height:1.6">${esc(n.t)}</div></div>`).join('')}`;
+  const upW = fn => updBook(curBook, bb => { const x = bb.works.find(x => x.id === curWorkId); fn(x, bb); });
+  $('#woBack').onclick = () => { VIEW = 'book'; render(); window.scrollTo(0, 0); };
+  $('#woEdit').onclick = () => editWork(curBook, curWorkId);
+  $('#woSave') && ($('#woSave').onclick = () => setPage(curBook, +$('#woPage').value || 0));
+  $('#woDone').onclick = () => { upW((x, bb) => { x.done = !(wPct(bb, x) >= 100); if (bb.status === 'want') { bb.status = 'reading'; bb.started = bb.started || dkey(new Date()); } }); render(); };
+  $$('[data-wr]').forEach(x => x.onclick = () => { upW(y => { y.rating = +x.dataset.wr; }); render(); });
+  $('#woReview').onchange = e => upW(y => { y.review = e.target.value; });
+  $('#woMic').onclick = () => toggleDictation($('#woNote'), $('#woMic'), $('#woMicSt'));
+  $('#woAdd').onclick = () => { const t = $('#woNote').value.trim(); if (!t) return toast('Напишите или надиктуйте заметку');
+    stopDictation(); upW((y, bb) => { y.notes = [...(y.notes || []), { id: uid(), d: dkey(new Date()), page: bb.read || 0, t }]; }); render(); toast('Заметка сохранена'); };
+  $$('[data-wdn]').forEach(x => x.onclick = () => { upW(y => { y.notes = (y.notes || []).filter(n => n.id !== x.dataset.wdn); }); render(); });
+}
 function editBook(id) {
   const b = id ? S.books[id] : { title: '', author: '', pages: '', cat: 'psych', status: 'want' };
   openSheet(`<h3>${id ? 'Изменить книгу' : 'Новая книга'}</h3>
@@ -973,22 +1089,34 @@ function editBook(id) {
     <label class="l">Автор</label><input id="ka" value="${esc(b.author || '')}">
     <label class="row chip" style="margin-top:14px;box-shadow:none;background:var(--card2)"><input type="checkbox" id="kown" style="width:auto" ${b.owned ? 'checked' : ''}><i class="ti ti-home"></i><span class="grow">Есть у меня дома</span></label>
     <label class="l">Почему хочу прочитать</label><textarea id="kn" style="min-height:70px" placeholder="Кто посоветовал, чем зацепила…">${esc(b.note || '')}</textarea>
-    <label class="l">Произведения в томе (если их несколько, каждое с новой строки)</label><textarea id="kw" style="min-height:60px" placeholder="Например: Белая гвардия&#10;Мастер и Маргарита">${esc((b.works || []).map(w => w.t).join('\n'))}</textarea>
     <label class="l">Страниц в книге</label><input id="kp" type="number" inputmode="numeric" value="${b.pages || ''}" placeholder="Например: 320">
     <label class="l">Тема</label><div class="chips" id="kc">${Object.entries(BOOK_CATS).map(([k, v]) => `<button type="button" class="chip ${k === b.cat ? 'on' : ''}" data-kc="${k}" style="border-color:${k === b.cat ? v.c : 'transparent'}"><span style="width:10px;height:10px;border-radius:50%;background:${v.c}"></span>${v.n}</button>`).join('')}</div>
+    <button type="button" class="link" id="kthm" style="margin-top:6px"><i class="ti ti-settings"></i> Изменить темы, цвета, добавить новую</button>
+    <details style="margin-top:12px" ${['publisher', 'city', 'year', 'series', 'seriesNo', 'volume', 'translator', 'isbn'].some(k => b[k]) ? 'open' : ''}><summary style="font-weight:700;cursor:pointer;padding:6px 0">Об издании (необязательно)</summary>
+      <div class="row"><div class="grow"><label class="l">Издательство</label><input id="kpub" value="${esc(b.publisher || '')}" placeholder="Мысль"></div>
+        <div style="width:90px"><label class="l">Год</label><input id="kyear" inputmode="numeric" value="${esc(b.year || '')}" placeholder="1994"></div></div>
+      <label class="l">Город</label><input id="kcity" value="${esc(b.city || '')}" placeholder="Москва">
+      <div class="row"><div class="grow"><label class="l">Серия</label><input id="kser" value="${esc(b.series || '')}" placeholder="Философское наследие"></div>
+        <div style="width:90px"><label class="l">№ в серии</label><input id="kserno" value="${esc(b.seriesNo || '')}" placeholder="117"></div></div>
+      <label class="l">Том собрания сочинений</label><input id="kvol" value="${esc(b.volume || '')}" placeholder="Том 3 из 4">
+      <label class="l">Переводчик</label><input id="ktr" value="${esc(b.translator || '')}">
+      <label class="l">ISBN</label><input id="kisbn" value="${esc(b.isbn || '')}">
+    </details>
     ${id ? '' : `<label class="l">Статус</label><div class="days" id="ks">${Object.entries(BOOK_ST).map(([k, [n]]) => `<button type="button" data-ks="${k}" class="${k === b.status ? 'on' : ''}" style="min-width:auto;font-size:12px;padding:8px 4px">${n}</button>`).join('')}</div>`}
     <div class="row" style="margin-top:16px">${id ? '<button class="btn2 danger" id="kdel"><i class="ti ti-trash"></i> Удалить</button>' : ''}<span class="grow"></span>
     <button class="btn2" id="kx">Отмена</button><button class="btn" id="kok">Сохранить</button></div>`, root => {
     root.querySelectorAll('[data-kc]').forEach(x => x.onclick = () => root.querySelectorAll('[data-kc]').forEach(y => { const on = y === x; y.classList.toggle('on', on); y.style.borderColor = on ? BOOK_CATS[y.dataset.kc].c : 'transparent'; }));
     root.querySelectorAll('[data-ks]').forEach(x => x.onclick = () => root.querySelectorAll('[data-ks]').forEach(y => y.classList.toggle('on', y === x)));
     $('#kx').onclick = closeSheet;
+    $('#kthm').onclick = () => { const keep = { t: $('#kt').value, a: $('#ka').value }; manageThemes(() => { editBook(id); if (!id) { $('#kt').value = keep.t; $('#ka').value = keep.a; } }); };
     $('#kdel') && ($('#kdel').onclick = () => { S.books[id] = { u: now(), deleted: true }; persist(); closeSheet(); go('books'); });
     $('#kok').onclick = () => {
       if (!$('#kt').value.trim()) return toast('Введите название');
       const nid = id || uid(), st = id ? b.status : (root.querySelector('[data-ks].on')?.dataset.ks || 'want');
       S.books[nid] = { ...(id ? S.books[id] : { read: 0, notes: [], log: [], added: dkey(new Date()) }), u: now(), title: $('#kt').value.trim(), author: $('#ka').value.trim(),
         pages: +$('#kp').value || 0, owned: $('#kown').checked, note: $('#kn').value.trim(),
-        works: $('#kw').value.split('\n').map(x => x.trim()).filter(Boolean).map(t => ((b.works || []).find(w => w.t === t)) || { id: uid(), t, done: false }), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
+        publisher: $('#kpub').value.trim(), year: $('#kyear').value.trim(), city: $('#kcity').value.trim(), series: $('#kser').value.trim(), seriesNo: $('#kserno').value.trim(),
+        volume: $('#kvol').value.trim(), translator: $('#ktr').value.trim(), isbn: $('#kisbn').value.trim(), cat: root.querySelector('[data-kc].on')?.dataset.kc || 'other', status: st,
         ...(id ? {} : st === 'reading' ? { started: dkey(new Date()) } : st === 'done' ? { finished: dkey(new Date()) } : {}) };
       persist(); closeSheet(); if (!id) bookTab = st; if (VIEW === 'book' || VIEW === 'books') render(); else openBook(nid);
     };
